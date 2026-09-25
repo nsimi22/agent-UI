@@ -15,6 +15,9 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const MAX_TRANSCRIPT = 400; // entries kept per agent
 const OUTPUT_FLUSH_MS = 50; // coalesce chatty stdout into fewer events
+// An escape sequence cut off at the end of a chunk (CSI or OSC, unterminated).
+// eslint-disable-next-line no-control-regex
+const PARTIAL_ESCAPE = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*)?$/;
 const XP_PER_LEVEL = 100;
 const levelOf = (xp) => Math.floor(xp / XP_PER_LEVEL) + 1;
 
@@ -26,6 +29,7 @@ let CONFIG_PATH;
 let DATA_DIR;
 let STATS_FILE;
 let options = {};
+let listenHost = '127.0.0.1';
 
 function resolveConfigPath() {
   const fromArg = process.argv.find((a) => a.startsWith('--config='));
@@ -119,15 +123,31 @@ function findOnPath(cmd) {
   return null;
 }
 
-// Windows .cmd/.bat launchers (code.cmd, cursor.cmd, …) can only run via cmd.exe.
-const quoteForCmd = (s) => `"${String(s).replace(/"/g, '""')}"`;
+// On Windows many CLIs are .cmd/.bat shims (claude.cmd, npx.cmd, code.cmd, …)
+// that only run through cmd.exe. Escape for cmd.exe the way cross-spawn does:
+// quote per the MSVC rules, then caret-escape metacharacters twice, because
+// the shim re-parses its arguments when it expands %*.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+function escapeCmdArg(arg) {
+  let s = String(arg).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
+  s = `"${s}"`;
+  return s.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
+}
+
+function spawnCommand(command, args, opts) {
+  if (process.platform === 'win32') {
+    const file = findOnPath(command) || command;
+    if (/\.(cmd|bat)$/i.test(file)) {
+      const line = [file.replace(CMD_META, '^$1'), ...args.map(escapeCmdArg)].join(' ');
+      return spawn(process.env.comspec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsVerbatimArguments: true });
+    }
+  }
+  return spawn(command, args, opts);
+}
 
 function launch(file, args) {
-  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(file);
   return new Promise((resolve, reject) => {
-    const child = viaCmd
-      ? spawn([file, ...args].map(quoteForCmd).join(' '), { shell: true, detached: true, stdio: 'ignore' })
-      : spawn(file, args, { detached: true, stdio: 'ignore' });
+    const child = spawnCommand(file, args, { detached: true, stdio: 'ignore' });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();
@@ -190,6 +210,7 @@ function loadAgents() {
         proc: null,
         transcript: [],
         lastLine: null, // latest non-blank output line of the current run
+        seq: 0, // transcript entry counter, so clients can merge live + fetched entries
         stats: { xp: 0, runs: 0, wins: 0, fails: 0, ...(stats[cfg.id] || {}) },
       },
     ])
@@ -248,7 +269,7 @@ function lastLineOf(text) {
 }
 
 function pushTranscript(a, entry) {
-  const full = { t: Date.now(), ...entry };
+  const full = { seq: ++a.seq, t: Date.now(), ...entry };
   a.transcript.push(full);
   // Trim in batches rather than shifting the array on every chunk.
   if (a.transcript.length > MAX_TRANSCRIPT * 1.25) a.transcript.splice(0, a.transcript.length - MAX_TRANSCRIPT);
@@ -282,7 +303,7 @@ function runAgent(a, prompt) {
 
   let child;
   try {
-    child = spawn(command, args, {
+    child = spawnCommand(command, args, {
       cwd: cfg.cwd,
       env,
       stdio: [cfg.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
@@ -307,23 +328,30 @@ function runAgent(a, prompt) {
 
   // Buffer output briefly so a chatty agent sends a few events per second
   // instead of one per pipe chunk.
-  let pending = null;
+  // Escape sequences are stripped at flush time; an unfinished one at the end
+  // of the buffer waits for the rest to arrive.
+  let pending = null; // { kind, raw }
   let flushTimer = null;
-  const flush = () => {
+  const flush = (final = true) => {
     clearTimeout(flushTimer);
     flushTimer = null;
-    if (pending) pushTranscript(a, pending);
-    pending = null;
+    if (!pending) return;
+    let { raw } = pending;
+    const tail = final ? '' : (raw.match(PARTIAL_ESCAPE) || [''])[0];
+    raw = raw.slice(0, raw.length - tail.length);
+    const text = stripVTControlCharacters(raw);
+    if (text) pushTranscript(a, { kind: pending.kind, text });
+    pending = tail ? { kind: pending.kind, raw: tail } : null;
   };
-  const onData = (kind) => (buf) => {
-    const text = stripVTControlCharacters(buf.toString('utf8'));
+  const onData = (kind) => (chunk) => {
     if (pending && pending.kind !== kind) flush();
-    if (pending) pending.text += text;
-    else pending = { kind, text };
-    flushTimer ??= setTimeout(flush, OUTPUT_FLUSH_MS);
+    if (pending) pending.raw += chunk;
+    else pending = { kind, raw: chunk };
+    flushTimer ??= setTimeout(() => flush(false), OUTPUT_FLUSH_MS);
   };
-  child.stdout.on('data', onData('out'));
-  child.stderr.on('data', onData('err'));
+  // setEncoding decodes UTF-8 across chunk boundaries (no split emoji).
+  child.stdout.setEncoding('utf8').on('data', onData('out'));
+  child.stderr.setEncoding('utf8').on('data', onData('err'));
 
   let timer = null;
   if (cfg.timeoutSec > 0) {
@@ -426,6 +454,17 @@ function serveStatic(req, res) {
   });
 }
 
+// Only answer requests addressed to this machine by name. This blocks DNS
+// rebinding, where a website points its own domain at 127.0.0.1.
+function localHost(req) {
+  try {
+    const { hostname } = new URL(`http://${req.headers.host}`);
+    return ['localhost', '127.0.0.1', '[::1]', listenHost].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 // Only accept state-changing requests from our own page, so a random website
 // open in another tab can't make your agents run commands.
 function sameOrigin(req) {
@@ -438,8 +477,16 @@ function sameOrigin(req) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handle(req, res).catch((err) => {
+    if (!res.headersSent) sendJson(res, 400, { error: err.message });
+    else res.end();
+  });
+});
+
+async function handle(req, res) {
   const { pathname } = new URL(req.url, 'http://x');
+  if (!localHost(req)) return sendJson(res, 403, { error: 'unexpected Host header' });
 
   if (pathname === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
@@ -509,7 +556,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' });
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
   serveStatic(req, res);
-});
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -543,6 +590,7 @@ async function start(opts = {}) {
   loadAgents();
 
   const host = opts.host || process.env.HOST || '127.0.0.1';
+  listenHost = host;
   const port = opts.port ?? (Number(process.env.PORT) || 4321);
   let actual;
   try {

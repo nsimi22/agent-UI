@@ -261,7 +261,14 @@ async function openDrawer(id) {
   $('#scrim').classList.add('open');
   updateDrawer();
   if (!state.transcripts.has(id)) {
-    state.transcripts.set(id, await agentApi(id, 'transcript', null, 'GET').catch(() => []));
+    // Live entries that arrive while the history loads collect in `live`;
+    // merge them after the fetched ones, skipping any the fetch already had.
+    const live = [];
+    state.transcripts.set(id, live);
+    const fetched = await agentApi(id, 'transcript', null, 'GET').catch(() => []);
+    const lastSeq = fetched.length ? fetched[fetched.length - 1].seq : 0;
+    state.transcripts.set(id, [...fetched, ...live.filter((e) => e.seq > lastSeq)]);
+    if (state.selected !== id) return;
   }
   renderTranscript();
   setTimeout(() => $('#prompt').focus(), 250);
@@ -441,6 +448,7 @@ $('#pickNone').addEventListener('click', () => {
 
 $('#partyBtn').addEventListener('click', () => {
   $('#partyPrompt').value = '';
+  $('#partyDialog').returnValue = ''; // so Esc isn't mistaken for the previous Send
   renderPicker();
   $('#partyDialog').showModal();
 });
