@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Arcade</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕹️</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="sky" aria-hidden="true"><div class="stars"></div></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">🕹️</span>
+      <div>
+        <h1>Agent Arcade</h1>
+        <p class="tagline" id="summary">Connecting to the arcade…</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="conn" id="conn" title="Live connection"><i></i><span>offline</span></span>
+      <button class="btn ghost" id="soundBtn" title="Toggle sounds (M)" aria-pressed="true">🔊</button>
+      <button class="btn primary" id="partyBtn" title="Send one quest to every idle agent (P)">📣 Party quest</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="floor" id="floor" aria-label="Agents"></section>
+    <p class="hint">Click an agent (or press <kbd>1</kbd>–<kbd>9</kbd>) to give it a quest. Add your own agents in <code>agents.json</code>.</p>
+  </main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawerName">
+    <div class="drawer-head">
+      <div class="drawer-avatar" id="drawerAvatar"></div>
+      <div class="drawer-title">
+        <h2 id="drawerName">Agent</h2>
+        <p id="drawerRole"></p>
+        <code id="drawerCmd"></code>
+      </div>
+      <button class="btn ghost icon" id="closeDrawer" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-stats" id="drawerStats"></div>
+    <div class="transcript" id="transcript" aria-live="polite"></div>
+    <form class="composer" id="composer">
+      <textarea id="prompt" rows="2" placeholder="Describe a quest… (⌘/Ctrl + Enter to send)"></textarea>
+      <div class="composer-actions">
+        <button type="button" class="btn ghost" id="clearBtn" title="Clear transcript">🧹 Clear</button>
+        <button type="button" class="btn danger" id="stopBtn" hidden>■ Stop</button>
+        <button type="submit" class="btn primary" id="sendBtn">Send ▶</button>
+      </div>
+    </form>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <dialog id="partyDialog">
+    <form method="dialog" id="partyForm">
+      <h2>📣 Party quest</h2>
+      <p>Every idle agent gets this quest at the same time.</p>
+      <textarea id="partyPrompt" rows="3" placeholder="e.g. Summarize what changed in this repo today" required></textarea>
+      <div class="composer-actions">
+        <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
+        <button value="go" class="btn primary">Send to everyone</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer class="ticker" aria-live="polite"><span class="ticker-label">LOG</span><div id="ticker"></div></footer>
+  <div class="toasts" id="toasts"></div>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+
+  <script src="critter.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
