@@ -1,34 +1,4 @@
 {
-  "agents": [
-    {
-      "id": "scout",
-      "name": "Pip",
-      "role": "Researcher",
-      "color": "#5eead4",
-      "hat": "antenna",
-      "command": "node",
-      "args": ["examples/demo-agent.js", "--persona", "scout", "{prompt}"],
-      "cwd": "."
-    },
-    {
-      "id": "builder",
-      "name": "Bolt",
-      "role": "Builder",
-      "color": "#fbbf24",
-      "hat": "hardhat",
-      "command": "node",
-      "args": ["examples/demo-agent.js", "--persona", "builder", "{prompt}"],
-      "cwd": "."
-    },
-    {
-      "id": "gremlin",
-      "name": "Grub",
-      "role": "Chaos Engineer",
-      "color": "#f472b6",
-      "hat": "horns",
-      "command": "node",
-      "args": ["examples/demo-agent.js", "--persona", "gremlin", "{prompt}"],
-      "cwd": "."
-    }
-  ]
+  "ide": "cursor",
+  "agents": []
 }

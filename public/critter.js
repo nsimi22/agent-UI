@@ -41,7 +41,7 @@ const HATS = {
 };
 
 function critterSVG(agent) {
-  const h = hashString(agent.id);
+  const h = hashString(agent.hashKey || agent.id);
   const color = agent.color || PALETTE[h % PALETTE.length];
   const names = Object.keys(HATS);
   const hat = agent.hat || names[(h >> 3) % names.length];

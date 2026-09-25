@@ -7,6 +7,7 @@ const RELAX_AFTER_MS = 12_000;
 const IDLE_QUIPS = ['Ready for a quest!', 'Give me something to do 👀', 'Idle hands…', 'Poke me!', 'Standing by ✨', '*hums quietly*'];
 const DONE_QUIPS = ['Nailed it!', 'Ta-da! 🎉', 'Quest complete!', 'Easy peasy.'];
 const ERROR_QUIPS = ['Oops…', 'That did not go well 😵', 'Help?', 'I blame cosmic rays.'];
+const WAITING_QUIPS = ['Need your OK! ✋', 'Psst… over here!', 'Waiting on you 👀'];
 
 const state = {
   agents: new Map(), // id -> agent
@@ -42,14 +43,19 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&l
 // Server status is sticky ("done" stays "done"); the pod relaxes back to idle
 // after a short celebration and dozes off when nothing happens for a while.
 function displayStatus(a) {
-  if (a.status === 'working') return 'working';
+  if (a.status === 'working' || a.status === 'waiting') return a.status;
   if (a.status === 'error') return 'error'; // stays visible until the next run
   const age = Date.now() - a.lastActivity;
   if (age > SLEEP_AFTER_MS) return 'sleep';
   if (a.status !== 'idle' && age > RELAX_AFTER_MS) return 'idle';
   return a.status;
 }
-const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', done: 'done', error: 'oops' };
+const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', waiting: 'needs you', done: 'done', error: 'oops' };
+const isWatched = (a) => a.kind === 'watch';
+const QUIPS = { idle: IDLE_QUIPS, waiting: WAITING_QUIPS, done: DONE_QUIPS, error: ERROR_QUIPS };
+const ONBOARDING = `<big>🛋️</big><b>The arcade is empty.</b><br/>
+  Run <code>npm run connect</code> once (or use <b>Connect Claude Code &amp; Codex</b> in the tray menu),<br/>
+  then start <code>claude</code> or <code>codex</code> in a Cursor terminal. Each session shows up here.`;
 const STATUS_CLASSES = Object.keys(STATUS_LABEL).map((s) => `s-${s}`);
 
 // ---------------------------------------------------------------------------
@@ -61,53 +67,69 @@ function podFor(id) {
 
 function renderFloor() {
   const floor = $('#floor');
-  floor.innerHTML = '';
+  floor.innerHTML = '<p class="floor-empty" hidden></p>';
   state.pods.clear();
-  [...state.agents.values()].forEach((a, i) => {
-    const pod = document.createElement('article');
-    pod.className = 'pod';
-    pod.dataset.id = a.id;
-    pod.tabIndex = 0;
-    pod.setAttribute('role', 'button');
-    pod.setAttribute('aria-label', `${a.name}, ${a.role || 'agent'}`);
-    pod.innerHTML = `
-      ${i < 10 ? `<kbd class="keycap">${(i + 1) % 10}</kbd>` : ''}
-      <span class="status"></span>
-      <div class="bubble" hidden></div>
-      <div class="stage">${critterSVG(a)}<div class="zzz"><span>z</span><span>z</span><span>Z</span></div></div>
-      <h3>${escapeHtml(a.name)}</h3>
-      <p class="role">${escapeHtml(a.role || '')}</p>
-      <div class="meta">
-        <span class="lvl"></span>
-        <div class="xpbar" title="XP"><i></i></div>
-        <span class="timer"></span>
-      </div>`;
-    pod.addEventListener('click', () => openDrawer(a.id));
-    pod.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openDrawer(a.id);
-      }
-    });
-    floor.appendChild(pod);
-    const q = (sel) => pod.querySelector(sel);
-    state.pods.set(a.id, {
-      el: pod,
-      status: q('.status'),
-      bubble: q('.bubble'),
-      lvl: q('.lvl'),
-      xpbar: q('.xpbar'),
-      xpfill: q('.xpbar i'),
-      timer: q('.timer'),
-    });
-    updatePod(a.id);
-  });
-  const empty = document.createElement('p');
-  empty.className = 'floor-empty';
-  empty.hidden = true;
-  floor.appendChild(empty);
+  for (const a of state.agents.values()) addPod(a);
   applyDensity();
   updateSummary();
+}
+
+// Pods are added and removed one at a time as terminal sessions come and go,
+// so the rest of the floor (and its animations) is left alone.
+function addPod(a) {
+  const pod = document.createElement('article');
+  pod.className = 'pod';
+  pod.dataset.id = a.id;
+  pod.tabIndex = 0;
+  pod.setAttribute('role', 'button');
+  pod.setAttribute('aria-label', `${a.name}, ${a.role || 'agent'}`);
+  pod.innerHTML = `
+    <kbd class="keycap" hidden></kbd>
+    <span class="status"></span>
+    <div class="bubble" hidden></div>
+    <div class="stage">${critterSVG(a)}<div class="zzz"><span>z</span><span>z</span><span>Z</span></div></div>
+    <h3>${escapeHtml(a.name)}</h3>
+    <p class="role">${escapeHtml(a.role || '')}</p>
+    <div class="meta">
+      <span class="lvl"></span>
+      <div class="xpbar" title="XP"><i></i></div>
+      <span class="timer"></span>
+    </div>`;
+  pod.addEventListener('click', () => openDrawer(a.id));
+  pod.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openDrawer(a.id);
+    }
+  });
+  $('#floor').insertBefore(pod, $('#floor .floor-empty'));
+  const q = (sel) => pod.querySelector(sel);
+  state.pods.set(a.id, {
+    el: pod,
+    keycap: q('.keycap'),
+    status: q('.status'),
+    bubble: q('.bubble'),
+    lvl: q('.lvl'),
+    xpbar: q('.xpbar'),
+    xpfill: q('.xpbar i'),
+    timer: q('.timer'),
+  });
+  updatePod(a.id);
+  renumberKeys();
+}
+
+function removePod(id) {
+  state.pods.get(id)?.el.remove();
+  state.pods.delete(id);
+  renumberKeys();
+}
+
+// Keys 1–9 and 0 open the first ten agents, in floor order.
+function renumberKeys() {
+  [...state.pods.values()].forEach((p, i) => {
+    p.keycap.hidden = i >= 10;
+    p.keycap.textContent = (i + 1) % 10;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +148,10 @@ function applyFilter() {
     if (matches) shown++;
   }
   const empty = $('#floor .floor-empty');
-  if (empty) {
-    empty.hidden = shown > 0;
-    empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
-  }
+  if (!empty) return;
+  empty.hidden = shown > 0;
+  if (!state.agents.size) empty.innerHTML = ONBOARDING;
+  else empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
 }
 
 function setFilter(filter) {
@@ -187,7 +209,7 @@ function updatePod(id) {
   p.xpbar.title = `${a.stats.xp} XP · ${a.stats.wins} wins · ${a.stats.fails} fails`;
   updateTimer(a);
 
-  const quips = ds === 'done' ? DONE_QUIPS : ds === 'error' ? ERROR_QUIPS : IDLE_QUIPS;
+  const quips = QUIPS[ds] || IDLE_QUIPS;
   if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, pick(quips));
   setBubble(id, state.bubbles.get(id) || '');
 }
@@ -223,13 +245,16 @@ function updateSummary() {
   const working = all.filter((a) => a.status === 'working').length;
   const wins = all.reduce((n, a) => n + a.stats.wins, 0);
   const failed = all.filter((a) => a.status === 'error').length;
+  const waiting = all.filter((a) => a.status === 'waiting').length;
   $('#summary').textContent =
     `${all.length} agent${all.length === 1 ? '' : 's'} · ` +
     (working ? `${working} hard at work` : 'everyone is chilling') +
-    (failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention` : '') +
+    (waiting ? ` · ${waiting} need${waiting === 1 ? 's' : ''} you` : '') +
+    (failed ? ` · ${failed} failed` : '') +
     ` · ${wins} quest${wins === 1 ? '' : 's'} completed`;
 
-  const counts = { all: all.length, working: 0, error: 0, done: 0, idle: 0 };
+  $('#partyBtn').hidden = !all.some((a) => !isWatched(a)); // only arcade-run agents take quests from here
+  const counts = { all: all.length, waiting: 0, working: 0, error: 0, done: 0, idle: 0 };
   for (const a of all) counts[a.status]++;
   document.querySelectorAll('.filter').forEach((b) => {
     b.querySelector('b').textContent = counts[b.dataset.filter];
@@ -251,7 +276,7 @@ async function openDrawer(id) {
   $('#drawerAvatar').innerHTML = critterSVG(a);
   $('#drawerName').textContent = a.name;
   $('#drawerRole').textContent = a.role || 'Agent';
-  $('#drawerCmd').textContent = `$ ${a.command}`;
+  $('#drawerCmd').textContent = isWatched(a) ? `watching ${a.command} in ${a.where}` : `$ ${a.command}`;
   $('#drawerCmd').title = a.command;
   $('#ideBtn').hidden = !a.ide;
   $('#ideBtn').textContent = `Open in ${a.ide} ↗`;
@@ -289,6 +314,8 @@ function updateDrawer() {
   const ds = displayStatus(a);
   $('#drawerAvatar').className = `drawer-avatar s-${ds}`;
   const working = a.status === 'working';
+  $('#composer').hidden = isWatched(a);
+  $('#watchNote').hidden = !isWatched(a);
   $('#stopBtn').hidden = !working;
   $('#sendBtn').disabled = working;
   $('#clearBtn').disabled = working;
@@ -399,6 +426,7 @@ $('#composer').addEventListener('submit', async (e) => {
 $('#prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#composer').requestSubmit();
 });
+$('#forgetBtn').addEventListener('click', () => agentApi(state.selected, 'forget').catch((e) => toast(e.message)));
 for (const action of ['stop', 'clear']) {
   $(`#${action}Btn`).addEventListener('click', () => agentApi(state.selected, action).catch((e) => toast(e.message)));
 }
@@ -418,6 +446,7 @@ $('#scrim').addEventListener('click', closeDrawer);
 // Party quest: pick several agents and send them the same prompt.
 function renderPicker() {
   $('#picker').innerHTML = [...state.agents.values()]
+    .filter((a) => !isWatched(a)) // terminal sessions take input in the terminal
     .map((a) => {
       const busy = a.status === 'working';
       return `<label class="${busy ? 'busy' : ''}" title="${escapeHtml(a.role || a.name)}${busy ? ' (busy)' : ''}">
@@ -519,14 +548,24 @@ function connect() {
     const a = JSON.parse(ev.data);
     const prev = state.agents.get(a.id);
     state.agents.set(a.id, a);
-    if (prev && prev.status !== a.status) {
+    if (!prev) {
+      // A new terminal session appeared.
+      if (state.agents.size === 1) renderFloor(); // replaces the onboarding card
+      else addPod(a);
+      updateSummary();
+      return;
+    }
+    if (prev.status !== a.status) {
       if (a.status === 'working') {
         state.bubbles.set(a.id, 'On it! 🏃');
         sfx('start');
+      } else if (a.status === 'waiting') {
+        state.bubbles.set(a.id, a.lastLine || pick(WAITING_QUIPS));
+        sfx('waiting');
       } else if (a.status === 'done') {
-        state.bubbles.set(a.id, pick(DONE_QUIPS));
+        state.bubbles.set(a.id, (isWatched(a) && a.lastLine) || pick(DONE_QUIPS));
         sfx('done');
-        confettiFrom(podFor(a.id));
+        confettiFrom(podFor(a.id), isWatched(a) ? 35 : 70);
       } else if (a.status === 'error') {
         state.bubbles.set(a.id, pick(ERROR_QUIPS));
         sfx('error');
@@ -551,8 +590,18 @@ function connect() {
     }
     const a = state.agents.get(id);
     if (a) a.lastActivity = entry.t;
-    if (isOutput(entry) && lastLine) setBubble(id, lastLine);
+    if (lastLine && entry.kind !== 'prompt' && entry.kind !== 'sys') setBubble(id, lastLine);
     if (state.selected === id && list) appendEntry(entry);
+  });
+
+  es.addEventListener('removed', (ev) => {
+    const { id } = JSON.parse(ev.data);
+    state.agents.delete(id);
+    state.transcripts.delete(id);
+    state.bubbles.delete(id);
+    if (state.selected === id) closeDrawer();
+    removePod(id);
+    updateSummary();
   });
 
   es.addEventListener('cleared', (ev) => {
@@ -616,6 +665,7 @@ function sfx(kind) {
     start: [[523, 0.06], [784, 0.08]],
     done: [[523, 0.08], [659, 0.08], [784, 0.08], [1047, 0.16]],
     error: [[330, 0.12], [247, 0.2]],
+    waiting: [[880, 0.08], [660, 0.08], [880, 0.12]],
     levelup: [[523, 0.1], [659, 0.1], [784, 0.1], [1047, 0.1], [784, 0.08], [1047, 0.3]],
   }[kind];
   let t = audio.currentTime;

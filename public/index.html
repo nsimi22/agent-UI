@@ -34,6 +34,7 @@
     <div class="toolbar">
       <div class="filters" role="group" aria-label="Filter agents">
         <button class="filter active" data-filter="all">All <b></b></button>
+        <button class="filter" data-filter="waiting">✋ Needs you <b></b></button>
         <button class="filter" data-filter="working">⚙️ Working <b></b></button>
         <button class="filter" data-filter="error">💥 Failed <b></b></button>
         <button class="filter" data-filter="done">✅ Done <b></b></button>
@@ -45,7 +46,7 @@
       </div>
     </div>
     <section class="floor" id="floor" aria-label="Agents"></section>
-    <p class="hint">Click an agent (or press <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd>) to give it a quest. Add your own agents in <code>agents.json</code>.</p>
+    <p class="hint">Click an agent (or press <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd>) to see what it's up to.</p>
   </main>
 
   <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawerName">
@@ -61,6 +62,10 @@
     </div>
     <div class="drawer-stats" id="drawerStats"></div>
     <div class="transcript" id="transcript" aria-live="polite"></div>
+    <div class="watch-note" id="watchNote" hidden>
+      <span>💻 This session runs in your terminal. Reply to it there.</span>
+      <button type="button" class="btn ghost small" id="forgetBtn" title="Remove from the floor">Dismiss</button>
+    </div>
     <form class="composer" id="composer">
       <textarea id="prompt" rows="2" placeholder="Describe a quest… (⌘/Ctrl + Enter to send)"></textarea>
       <div class="composer-actions">
