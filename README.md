@@ -9,9 +9,9 @@ A playful web UI for your **local agents**. Each agent is a little critter on th
 
 Click an agent to open its chat drawer and send it a quest. The drawer streams output live, and you can stop a run from there. **📣 Party quest** sends the same prompt to every idle agent at once.
 
-Any command-line tool can be an agent: `claude`, `ollama`, `aider`, a Python script, a shell script. The only runtime is Node, with no dependencies to install.
+Any command-line tool can be an agent: `claude`, `ollama`, `aider`, a Python script, a shell script. You can use it in the browser, where the only runtime is Node with no dependencies to install, or as a **desktop app** with a tray icon and notifications.
 
-## Quick start
+## Quick start (browser)
 
 ```bash
 npm start            # or: node server.js
@@ -19,6 +19,29 @@ npm start            # or: node server.js
 ```
 
 It comes with three demo agents (Pip, Bolt and Grub, who is chaos), so you can try it right away.
+
+## Desktop app
+
+Agent Arcade also runs as a desktop app (Electron) for macOS, Windows and Linux:
+
+- It has its own window, with the agent server running inside the app.
+- **Tray / menu-bar icon.** It shows how many agents are working, lists each agent's status, and opens an agent when you click it. Closing the window keeps your agents running in the tray. Use **Quit** in the tray menu to stop them.
+- **System notifications** when an agent finishes or fails, showing its last line of output. Click one to jump to that agent. You can turn them off from the tray menu.
+- A Dock/taskbar badge with the working count, and an "Open at login" option on macOS and Windows.
+
+```bash
+npm install            # one time: installs Electron + electron-builder
+npm run desktop        # run the app from this checkout
+
+npm run dist           # build an installer for your OS into dist/
+npm run dist:mac       # .dmg + .zip   (build on a Mac)
+npm run dist:win       # .exe installer
+npm run dist:linux     # AppImage + .deb
+```
+
+When you run from the checkout, the app uses the same `agents.local.json` / `agents.json` and `data/` as `npm start`. The installed app keeps its own `agents.json` in your user-data folder. On first launch it copies the demo agents there. Open it from the tray with **Edit agents…**, then use **Reload agents** to apply your changes. Agents whose `command` is `node` use the app's bundled Node, so the demo agents work even if Node isn't installed.
+
+> The builds aren't code-signed, so the first time you open the app, macOS Gatekeeper and Windows SmartScreen will warn you. On a Mac, right-click → **Open**.
 
 ## Add your own agents
 

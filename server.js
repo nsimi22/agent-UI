@@ -4,6 +4,7 @@
 // to a playful browser UI over Server-Sent Events.
 
 const http = require('http');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -11,15 +12,17 @@ const { spawn } = require('child_process');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const DATA_DIR = path.join(ROOT, 'data');
-const STATS_FILE = path.join(DATA_DIR, 'stats.json');
-const HOST = process.env.HOST || '127.0.0.1';
-const PORT = Number(process.env.PORT) || 4321;
 const MAX_TRANSCRIPT = 400; // entries kept per agent
 const XP_PER_LEVEL = 100;
 
 // ---------------------------------------------------------------------------
 // Config
+
+// Set by start(); see the bottom of this file for the defaults.
+let CONFIG_PATH;
+let DATA_DIR;
+let STATS_FILE;
+let options = {};
 
 function resolveConfigPath() {
   const fromArg = process.argv.find((a) => a.startsWith('--config='));
@@ -28,8 +31,6 @@ function resolveConfigPath() {
   const local = path.join(ROOT, 'agents.local.json');
   return fs.existsSync(local) ? local : path.join(ROOT, 'agents.json');
 }
-
-const CONFIG_PATH = resolveConfigPath();
 
 function loadConfig() {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -51,7 +52,7 @@ function loadConfig() {
       command: a.command,
       args: Array.isArray(a.args) ? a.args.map(String) : ['{prompt}'],
       stdin: Boolean(a.stdin),
-      cwd: a.cwd ? path.resolve(ROOT, a.cwd.replace(/^~(?=$|\/)/, os.homedir())) : process.cwd(),
+      cwd: a.cwd ? path.resolve(ROOT, a.cwd.replace(/^~(?=$|\/)/, os.homedir())) : options.defaultCwd || process.cwd(),
       env: a.env && typeof a.env === 'object' ? a.env : {},
       timeoutSec: Number(a.timeoutSec) || 0,
     };
@@ -80,22 +81,26 @@ function saveStatsSoon() {
   }, 300);
 }
 
-const stats = loadStats();
-const agents = new Map(
-  loadConfig().map((cfg) => [
-    cfg.id,
-    {
-      cfg,
-      status: 'idle', // idle | working | done | error
-      task: null,
-      startedAt: null,
-      lastActivity: Date.now(),
-      proc: null,
-      transcript: [],
-      stats: { xp: 0, runs: 0, wins: 0, fails: 0, ...(stats[cfg.id] || {}) },
-    },
-  ])
-);
+let agents = new Map();
+
+function loadAgents() {
+  const stats = loadStats();
+  agents = new Map(
+    loadConfig().map((cfg) => [
+      cfg.id,
+      {
+        cfg,
+        status: 'idle', // idle | working | done | error
+        task: null,
+        startedAt: null,
+        lastActivity: Date.now(),
+        proc: null,
+        transcript: [],
+        stats: { xp: 0, runs: 0, wins: 0, fails: 0, ...(stats[cfg.id] || {}) },
+      },
+    ])
+  );
+}
 
 function publicAgent(a) {
   const { xp } = a.stats;
@@ -122,8 +127,11 @@ function publicAgent(a) {
 // Server-Sent Events
 
 const clients = new Set();
+// In-process listeners (the desktop app uses this for tray + notifications).
+const bus = new EventEmitter();
 
 function broadcast(event, data) {
+  bus.emit(event, data);
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(payload);
 }
@@ -149,12 +157,20 @@ function runAgent(a, prompt) {
   if (a.proc) return { error: `${a.cfg.name} is busy` };
   const { cfg } = a;
   const args = cfg.args.map((arg) => arg.split('{prompt}').join(prompt));
+  let command = cfg.command;
+  const env = { ...process.env, ...cfg.env, FORCE_COLOR: '0', NO_COLOR: '1' };
+  // Inside the desktop app there may be no `node` on PATH, so run Node
+  // scripts with Electron's own bundled Node instead.
+  if (command === 'node' && options.nodeBinary) {
+    command = options.nodeBinary;
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
 
   let child;
   try {
-    child = spawn(cfg.command, args, {
+    child = spawn(command, args, {
       cwd: cfg.cwd,
-      env: { ...process.env, ...cfg.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env,
       stdio: [cfg.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
@@ -366,16 +382,56 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
-function shutdown() {
+function stopAll() {
   for (const a of agents.values()) a.proc && a.proc.kill('SIGTERM');
-  process.exit(0);
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
 
-server.listen(PORT, HOST, () => {
-  const names = [...agents.values()].map((a) => a.cfg.name).join(', ');
-  console.log(`\n  🕹️  Agent Arcade is open at http://${HOST}:${PORT}`);
-  console.log(`  📜 config: ${path.relative(process.cwd(), CONFIG_PATH) || CONFIG_PATH}`);
-  console.log(`  🤖 agents: ${names}\n`);
-});
+// Start the arcade. Resolves with { url, port, server, bus, snapshot, stopAll }.
+function start(opts = {}) {
+  options = opts;
+  CONFIG_PATH = opts.configPath || resolveConfigPath();
+  DATA_DIR = opts.dataDir || path.join(ROOT, 'data');
+  STATS_FILE = path.join(DATA_DIR, 'stats.json');
+  loadAgents();
+
+  const host = opts.host || process.env.HOST || '127.0.0.1';
+  const port = opts.port ?? (Number(process.env.PORT) || 4321);
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      const actual = server.address().port;
+      resolve({
+        url: `http://${host}:${actual}`,
+        port: actual,
+        configPath: CONFIG_PATH,
+        server,
+        bus,
+        snapshot: () => [...agents.values()].map(publicAgent),
+        stopAll,
+      });
+    });
+  });
+}
+
+module.exports = { start };
+
+if (require.main === module) {
+  const shutdown = () => {
+    stopAll();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  start()
+    .then(({ url, configPath }) => {
+      const names = [...agents.values()].map((a) => a.cfg.name).join(', ');
+      console.log(`\n  🕹️  Agent Arcade is open at ${url}`);
+      console.log(`  📜 config: ${path.relative(process.cwd(), configPath) || configPath}`);
+      console.log(`  🤖 agents: ${names}\n`);
+    })
+    .catch((err) => {
+      console.error(`Agent Arcade failed to start: ${err.message}`);
+      process.exit(1);
+    });
+}

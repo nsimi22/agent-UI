@@ -527,3 +527,6 @@ function tick() {
 }
 
 connect();
+
+// Hook for the desktop app (clicking a notification opens that agent).
+window.arcade = { open: openDrawer };
