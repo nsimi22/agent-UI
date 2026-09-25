@@ -7,7 +7,7 @@ A playful dashboard for the coding agents you run in your terminals. Every **Cla
 - It **hops for joy** with confetti when a turn finishes, and shows the agent's reply.
 - It **naps** when nothing's happening, and earns **XP and levels** per project.
 
-Keep working in your terminals exactly as before. The arcade only watches: it tells you at a glance which of your 10+ sessions needs you. Click a critter to see its activity and jump to that project in Cursor.
+Keep working in your terminals exactly as before. The arcade tells you at a glance which of your 10+ sessions needs you. Click a critter to see its activity, jump to its exact terminal tab in Cursor, or reply to it right from the arcade.
 
 ## Quick start
 
@@ -88,6 +88,20 @@ To stop watching your sessions at any time: `npm run disconnect`.
 | sleeping | **napping** | nothing has happened for a minute |
 
 Each session is named after its folder (`api`, `web`, …). A critter's colour, hat and level stay with the project across sessions. Closed sessions leave the floor two minutes after they end; use **Dismiss** in the drawer to remove one sooner.
+
+## Reply from the arcade, or jump to the exact terminal
+
+`npm run connect` also installs a small **Agent Arcade Terminals** extension into Cursor (and VS Code or Windsurf, if you have them). Reload your open Cursor windows once afterwards. Then, in any terminal session's drawer:
+
+- **Open terminal ↗** brings that session's Cursor window to the front and selects its exact terminal tab.
+- **Reply** types your message into that terminal and presses Enter, just as if you'd typed it there. Multi-line replies arrive as one paste.
+- When the session is waiting on you, **✓ Approve** presses Enter (the highlighted choice, usually "Yes") and **Esc** presses Esc.
+
+How it finds the right tab: the hooks report the agent's process id, and the arcade walks up its parent processes to the shell that the terminal tab started. The extension checks each terminal in its window for that shell.
+
+Safety: the arcade only types into a terminal while that exact agent process is still running there. If the agent has exited, the tab is back at a plain shell prompt, and the arcade refuses to send anything. The extension only talks to the arcade on `127.0.0.1`, and only programs (not web pages) can connect to it.
+
+A session becomes reachable after its next hook event once the extension is running, so sessions that were already open show up after they do something. This isn't available on Windows yet.
 
 ## Running a big crew (10+ agents)
 
@@ -205,6 +219,7 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 - Cross-origin `POST`s are refused, so other websites open in your browser can't start your agents.
 - An agent runs with your user's permissions, so configure it the way you would in a terminal.
 - Terminal sessions report to `POST /api/hooks/claude` and `/api/hooks/codex`. These accept only local requests, answer with an empty `204`, and never send anything back to the agent. The Claude Code transcript is only read from files under `~/.claude`.
+- Replies are only typed into a terminal while the agent's own process is still running there (checked with `ps` right before sending), so nothing can land in a bare shell. The editor extension's endpoints refuse any request that comes from a web page.
 
 ## API (for tinkering)
 
@@ -215,3 +230,5 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 - `GET /api/agents/:id/transcript` returns the transcript
 - `POST /api/hooks/claude` and `/api/hooks/codex` receive hook events from your terminals
 - `POST /api/agents/:id/forget` dismisses a watched session
+- `POST /api/agents/:id/terminal` shows a watched session's terminal; `POST /api/agents/:id/reply` with `{ "text" }` or `{ "key": "enter" | "esc" }` types into it
+- `GET /api/ide/stream` and `POST /api/ide/ack` are used by the editor extension

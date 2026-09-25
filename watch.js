@@ -148,6 +148,7 @@ function createWatch({ agents, makeAgent, pushTranscript, setStatus, award, broa
     return a;
   }
 
+  // Returns the agent the event was about.
   function apply(source, act) {
     const a = sessionAgent(source, act);
     endedAt.delete(a.cfg.id);
@@ -203,6 +204,7 @@ function createWatch({ agents, makeAgent, pushTranscript, setStatus, award, broa
         setStatus(a, 'idle');
         break;
     }
+    return a;
   }
 
   function remove(id) {
@@ -231,7 +233,7 @@ function createWatch({ agents, makeAgent, pushTranscript, setStatus, award, broa
         }
       }
     }
-    apply(source, act);
+    return apply(source, act);
   }
 
   const pruneTimer = setInterval(() => {

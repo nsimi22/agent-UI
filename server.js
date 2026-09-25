@@ -11,6 +11,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { stripVTControlCharacters } = require('util');
 const { createWatch } = require('./watch');
+const { createTerminals, processChain, stillRunning } = require('./terminals');
 const { truncate, tildify, readJson, writeJson } = require('./util');
 
 const ROOT = __dirname;
@@ -157,8 +158,8 @@ function launch(file, args) {
   });
 }
 
-async function openInIde(a) {
-  const { ide, cwd } = a.cfg;
+async function openInIde(a, cwd = a.cfg.cwd) {
+  const { ide } = a.cfg;
   if (!ide) throw new Error(`${a.cfg.name} has no "ide" set in the agents config`);
   const bin = findOnPath(ide.cli);
   if (bin) return launch(bin, ide.args.map((x) => x.replaceAll('{path}', cwd)));
@@ -183,6 +184,7 @@ function saveStatsSoon() {
 
 let agents = new Map();
 let watch = null; // see watch.js
+const terminals = createTerminals({ sse: (e, d) => sse(e, d), broadcast: (e, d) => broadcast(e, d) });
 // Watched sessions (cfg.source set) keep XP, colour and hat per project.
 const projectKey = (cfg) => (cfg.source ? `${cfg.source}:${cfg.cwd}` : cfg.id);
 
@@ -228,6 +230,7 @@ function publicAgent(a) {
     status: a.status,
     task: a.task && truncate(a.task, 200), // the full prompt is in the transcript
     lastLine: a.lastLine,
+    terminal: Boolean(a.shellChain), // we know which terminal tab it runs in
     startedAt: a.startedAt,
     lastActivity: a.lastActivity,
     stats: {
@@ -386,6 +389,51 @@ function runAgent(a, prompt) {
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// Terminal sessions: which tab they run in, showing it, typing into it
+
+// Hooks send the agent's process id; its parents lead to the terminal's shell.
+function trackProcess(a, pid) {
+  if (!Number.isInteger(pid) || pid <= 1 || a.agentPid === pid) return;
+  a.agentPid = pid;
+  a.shellChain = null;
+  processChain(pid).then((found) => {
+    if (a.agentPid !== pid || !found) return;
+    a.shellChain = found.chain;
+    broadcast('agent', publicAgent(a));
+  });
+}
+
+const NO_EDITOR = 'Install the Agent Arcade Terminals extension in Cursor (npm run connect does it) to reach terminals from here.';
+
+async function showTerminal(a) {
+  if (!a.shellChain) {
+    await openInIde(a).catch(() => {});
+    return { ok: true, exact: false, note: "Opened the project; this session hasn't reported its terminal yet." };
+  }
+  const found = await terminals.command({ type: 'focus', pids: a.shellChain });
+  if (!found) {
+    await openInIde(a).catch(() => {});
+    return { ok: true, exact: false, note: terminals.count() ? "Couldn't find that terminal in an open editor window." : NO_EDITOR };
+  }
+  // Re-opening the window's own folder brings that exact window to the front.
+  if (found.folder) await openInIde(a, found.folder).catch(() => {});
+  return { ok: true, exact: true };
+}
+
+async function replyInTerminal(a, body) {
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const key = body.key === 'esc' ? 'esc' : 'enter';
+  if (text.length > 20000) return { error: 'That reply is too long.' };
+  if (!a.shellChain) return { error: "This session hasn't reported which terminal it's in yet." };
+  // If the agent has exited, the tab is a plain shell: typing there would run commands.
+  if (!(await stillRunning(a.agentPid, a.shellChain[1]))) return { error: `${a.cfg.name} isn't running in that terminal any more.` };
+  if (!terminals.count()) return { error: NO_EDITOR };
+  const found = await terminals.command({ type: 'send', pids: a.shellChain, text, key });
+  if (!found) return { error: "Couldn't find that terminal in an open editor window." };
+  return { ok: true }; // the agent's own prompt hook records what was sent
+}
+
 // Record a finished run/turn and announce a level-up if it earned one.
 function award(a, { ok, xp }) {
   const before = levelOf(a.stats.xp);
@@ -494,7 +542,7 @@ async function handle(req, res) {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    res.write(sse('hello', { agents: snapshot() }));
+    res.write(sse('hello', { agents: snapshot(), editors: terminals.count() }));
     clients.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => {
@@ -520,11 +568,23 @@ async function handle(req, res) {
       event = null;
     }
     res.writeHead(204).end();
-    if (event) watch.handle(hook[1], event);
+    const a = event && watch.handle(hook[1], event);
+    if (a) trackProcess(a, Number(req.headers['x-arcade-pid']));
     return;
   }
 
-  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide|forget)$/);
+  // The Agent Arcade Terminals editor extension. It's a Node client, never a
+  // web page, so anything carrying an Origin header is turned away.
+  if (pathname.startsWith('/api/ide/')) {
+    if (req.headers.origin) return sendJson(res, 403, { error: 'editor extension only' });
+    if (pathname === '/api/ide/stream' && req.method === 'GET') return terminals.attach(req, res);
+    if (pathname === '/api/ide/ack' && req.method === 'POST') {
+      terminals.ack(await readBody(req).catch(() => null));
+      return res.writeHead(204).end();
+    }
+  }
+
+  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide|forget|terminal|reply)$/);
   if (m) {
     const a = agents.get(decodeURIComponent(m[1]));
     if (!a) return sendJson(res, 404, { error: 'unknown agent' });
@@ -536,6 +596,11 @@ async function handle(req, res) {
     const watched = Boolean(a.cfg.source);
     if (watched && (action === 'run' || action === 'stop')) {
       return sendJson(res, 409, { error: `${a.cfg.name} runs in your terminal — reply to it there` });
+    }
+    if (action === 'terminal' || action === 'reply') {
+      if (!watched) return sendJson(res, 409, { error: 'only terminal sessions have a terminal' });
+      const r = action === 'terminal' ? await showTerminal(a) : await replyInTerminal(a, await readBody(req).catch(() => ({})));
+      return sendJson(res, r.error ? 409 : 200, r);
     }
     if (action === 'forget') {
       if (!watched) return sendJson(res, 409, { error: 'only watched sessions can be dismissed' });
