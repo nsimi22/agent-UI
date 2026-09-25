@@ -1,0 +1,24 @@
+{
+  "name": "agent-arcade-terminals",
+  "displayName": "Agent Arcade Terminals",
+  "description": "Lets Agent Arcade jump to, and type into, the terminal a Claude Code or Codex session runs in.",
+  "version": "0.1.0",
+  "publisher": "agent-arcade",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Agent Arcade",
+      "properties": {
+        "agentArcade.port": {
+          "type": "number",
+          "default": 4321,
+          "description": "Port the Agent Arcade app listens on (127.0.0.1)."
+        }
+      }
+    }
+  }
+}

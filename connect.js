@@ -11,7 +11,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { readJson } = require('./util');
+const { buildVsix, EXTENSION_ID } = require('./ide/build-vsix');
 
 const DEFAULT_PORT = 4321;
 const hookUrl = (port, source) => `http://127.0.0.1:${port}/api/hooks/${source}`;
@@ -36,9 +38,12 @@ const CLAUDE_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostTo
 // "@-" (stdin) for hooks, or the argument Codex appends for notify.
 const curlArgv = (port, source) => ['curl', '-s', '-o', '/dev/null', '-m', '2', '-X', 'POST', '-H', 'Content-Type: application/json', hookUrl(port, source), '--data-binary'];
 
-// Hooks run through a shell; `|| true` means a closed arcade never fails one.
+// Hooks run through a shell, which fills in $PPID: the agent's own process,
+// used to find the terminal it runs in. `|| true` means a closed arcade never
+// fails a hook.
 function hookCommand(port, source) {
-  return `${curlArgv(port, source).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')} @- || true`;
+  const argv = [...curlArgv(port, source).slice(0, -1), '-H', 'X-Arcade-Pid: $PPID', '--data-binary'];
+  return `${argv.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')} @- || true`;
 }
 
 function readJsonFile(file) {
@@ -169,6 +174,58 @@ function disconnectCodex() {
 }
 
 // ---------------------------------------------------------------------------
+// Editor extension: lets the arcade show, and type into, the exact terminal
+// tab a session runs in. Installed into whichever of these editors you have.
+
+const EDITORS = [
+  { name: 'Cursor', cli: 'cursor', app: 'Cursor' },
+  { name: 'VS Code', cli: 'code', app: 'Visual Studio Code' },
+  { name: 'Windsurf', cli: 'windsurf', app: 'Windsurf' },
+];
+
+function editorCli({ cli, app }) {
+  const candidates = [
+    ...(process.env.PATH || '').split(path.delimiter).map((d) => path.join(d, process.platform === 'win32' ? `${cli}.cmd` : cli)),
+    `/Applications/${app}.app/Contents/Resources/app/bin/${cli}`,
+    path.join(os.homedir(), `Applications/${app}.app/Contents/Resources/app/bin/${cli}`),
+  ];
+  return candidates.find((f) => fs.existsSync(f)) || null;
+}
+
+function runEditorCli(file, args) {
+  execFileSync(file, args, { stdio: 'ignore', timeout: 60_000, shell: process.platform === 'win32' });
+}
+
+function installExtension() {
+  const vsix = buildVsix(path.join(os.tmpdir(), 'agent-arcade-terminals.vsix'));
+  const done = [];
+  for (const editor of EDITORS) {
+    const cli = editorCli(editor);
+    if (!cli) continue;
+    try {
+      runEditorCli(cli, ['--install-extension', vsix, '--force']);
+      done.push(editor.name);
+    } catch {}
+  }
+  return done.length
+    ? `terminal extension installed in ${done.join(', ')} (reload open windows once)`
+    : "no Cursor / VS Code / Windsurf found, so the terminal extension wasn't installed";
+}
+
+function uninstallExtension() {
+  const done = [];
+  for (const editor of EDITORS) {
+    const cli = editorCli(editor);
+    if (!cli) continue;
+    try {
+      runEditorCli(cli, ['--uninstall-extension', EXTENSION_ID]);
+      done.push(editor.name);
+    } catch {} // wasn't installed there
+  }
+  return done.length ? `terminal extension removed from ${done.join(', ')}` : null;
+}
+
+// ---------------------------------------------------------------------------
 // Everything
 
 function connectAll(port = DEFAULT_PORT) {
@@ -176,6 +233,7 @@ function connectAll(port = DEFAULT_PORT) {
     `Claude Code: hooks added to ${connectClaude(port)}`,
     ...connectCodex(port).map((m) => `Codex: ${m}`),
     'Codex: open codex and run /hooks once to trust the Agent Arcade hooks. Until then you only get "finished" updates.',
+    `Editors: ${installExtension()}`,
   ];
   if (port !== DEFAULT_PORT) messages.push(`Note: the hooks point at port ${port}; keep the arcade on that port.`);
   return { messages };
@@ -184,10 +242,12 @@ function connectAll(port = DEFAULT_PORT) {
 function disconnectAll() {
   const claude = disconnectClaude();
   const codex = disconnectCodex();
+  const editors = uninstallExtension();
   return {
     messages: [
       claude ? `Claude Code: hooks removed from ${claude}` : 'Claude Code: nothing to remove',
       codex.length ? `Codex: removed from ${codex.join(' and ')}` : 'Codex: nothing to remove',
+      ...(editors ? [`Editors: ${editors}`] : []),
     ],
   };
 }
