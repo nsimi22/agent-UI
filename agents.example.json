@@ -1,4 +1,5 @@
 {
+  "ide": "cursor",
   "agents": [
     {
       "id": "claude",
@@ -7,7 +8,10 @@
       "color": "#fb923c",
       "hat": "crown",
       "command": "claude",
-      "args": ["-p", "{prompt}"],
+      "args": [
+        "-p",
+        "{prompt}"
+      ],
       "cwd": "~/code/my-project",
       "timeoutSec": 900
     },
@@ -18,7 +22,10 @@
       "color": "#a78bfa",
       "hat": "wizard",
       "command": "ollama",
-      "args": ["run", "llama3.2"],
+      "args": [
+        "run",
+        "llama3.2"
+      ],
       "stdin": true
     },
     {
@@ -28,8 +35,14 @@
       "color": "#60a5fa",
       "hat": "headphones",
       "command": "aider",
-      "args": ["--yes-always", "--no-pretty", "--message", "{prompt}"],
-      "cwd": "~/code/my-project"
+      "args": [
+        "--yes-always",
+        "--no-pretty",
+        "--message",
+        "{prompt}"
+      ],
+      "cwd": "~/code/my-project",
+      "ide": "webstorm"
     },
     {
       "id": "script",
@@ -38,9 +51,13 @@
       "color": "#4ade80",
       "hat": "cap",
       "command": "python3",
-      "args": ["./my_agent.py"],
+      "args": [
+        "./my_agent.py"
+      ],
       "stdin": true,
-      "env": { "MY_AGENT_MODE": "fast" }
+      "env": {
+        "MY_AGENT_MODE": "fast"
+      }
     }
   ]
 }

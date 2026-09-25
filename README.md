@@ -18,7 +18,15 @@ npm start            # or: node server.js
 # open http://127.0.0.1:4321
 ```
 
-It comes with three demo agents (Pip, Bolt and Grub, who is chaos), so you can try it right away.
+It comes with three demo agents (Pip, Bolt and Grub, who is chaos), so you can try it right away. To see a full crew of 12, run `npm run demo:crowd`.
+
+## Running a big crew (10+ agents)
+
+- **Compact layout.** It switches on automatically above 6 agents. Toggle it with **▦ Compact** or `C`.
+- **Filters.** `All · Working · Failed · Done · Idle` show live counts. Failed agents stay marked until their next run, so they don't get lost in a crowd.
+- **Search.** Press `/`, type part of a name or role, then press `Enter` to open the first match.
+- **Party quest picker.** Choose exactly which agents get a prompt. It starts with every idle agent selected.
+- Press `1`–`9` and `0` to jump to the first 10 agents.
 
 ## Desktop app
 
@@ -39,7 +47,7 @@ npm run dist:win       # .exe installer
 npm run dist:linux     # AppImage + .deb
 ```
 
-When you run from the checkout, the app uses the same `agents.local.json` / `agents.json` and `data/` as `npm start`. The installed app keeps its own `agents.json` in your user-data folder. On first launch it copies the demo agents there. Open it from the tray with **Edit agents…**, then use **Reload agents** to apply your changes. Agents whose `command` is `node` use the app's bundled Node, so the demo agents work even if Node isn't installed.
+When you run from the checkout, the app uses the same `agents.local.json` / `agents.json` and `data/` as `npm start`. The installed app keeps its own `agents.json` in your user-data folder. On first launch it copies the demo agents there. Open it from the tray with **Edit agents…**, then use **Reload agents** to apply your changes. Agents whose `command` is `node` use the app's bundled Node, so the demo agents work even if Node isn't installed. The app also loads the PATH from your login shell. Without that, macOS apps opened from the Dock can't find tools like `claude`, `cursor` or `idea`.
 
 > The builds aren't code-signed, so the first time you open the app, macOS Gatekeeper and Windows SmartScreen will warn you. On a Mac, right-click → **Open**.
 
@@ -84,7 +92,27 @@ Copy `agents.example.json` to `agents.local.json` and edit it. The local file is
 | `env`        | extra environment variables                                                              |
 | `timeoutSec` | kill the run after this many seconds                                                     |
 | `name`, `role`, `color` | how the critter looks and what it's called                                     |
+| `ide`        | editor for **Open in IDE**: a name like `cursor`, a custom `{label, command, args}` object, or `null` for none. Defaults to the top-level `ide`. |
 | `hat`        | `antenna`, `hardhat`, `horns`, `crown`, `wizard`, `headphones`, `cap`, `bow` (picked from the id if omitted) |
+
+### Open an agent's project in your IDE
+
+Set `ide` once at the top of the config, or give an agent its own. The agent's drawer then gets an **Open in Cursor ↗** button that opens the agent's `cwd` in that editor.
+
+```json
+{
+  "ide": "cursor",
+  "agents": [
+    { "id": "api", "command": "claude", "args": ["-p", "{prompt}"], "cwd": "~/code/api" },
+    { "id": "web", "command": "claude", "args": ["-p", "{prompt}"], "cwd": "~/code/web", "ide": "webstorm" },
+    { "id": "etc", "command": "claude", "args": ["-p", "{prompt}"], "cwd": "~/code/etc", "ide": { "label": "Sublime", "command": "subl", "args": ["{path}"] } }
+  ]
+}
+```
+
+Supported names: `cursor`, `vscode` (or `code`), `insiders`, `windsurf`, `zed`, and the JetBrains IDEs `idea`, `webstorm`, `pycharm`, `goland`, `rider`, `phpstorm`, `rubymine`, `clion`, `rustrover`. Any other editor works as a custom `{ label, command, args }` entry.
+
+On macOS, the button falls back to `open -a <App>` if the command-line launcher isn't installed. On other systems, install the launcher: for Cursor, VS Code and Windsurf, run *Shell Command: Install '…' command in PATH* from the editor's command palette. For JetBrains, turn on **Settings → Tools → Shell scripts** in JetBrains Toolbox.
 
 The exit code decides the outcome: `0` means done 🎉, anything else means oops 😵.
 
@@ -94,7 +122,9 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 
 | key          | action                              |
 | ------------ | ----------------------------------- |
-| `1`–`9`      | open that agent                     |
+| `1`–`9`, `0` | open that agent (0 is the 10th)     |
+| `/`          | search agents                       |
+| `C`          | toggle compact layout               |
 | `⌘/Ctrl + ↵` | send the quest                      |
 | `Esc`        | close the drawer                    |
 | `P`          | party quest                         |

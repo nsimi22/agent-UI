@@ -14,7 +14,11 @@ const state = {
   bubbles: new Map(), // id -> text
   selected: null,
   sound: readPref('sound', true),
+  density: readPref('density', 'auto'), // auto | cozy | compact
+  filter: 'all',
+  search: '',
 };
+const AUTO_COMPACT_OVER = 6; // agents
 
 function readPref(key, fallback) {
   try {
@@ -37,6 +41,7 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&l
 // after a short celebration and dozes off when nothing happens for a while.
 function displayStatus(a) {
   if (a.status === 'working') return 'working';
+  if (a.status === 'error') return 'error'; // stays visible until the next run
   const age = Date.now() - a.lastActivity;
   if (age > SLEEP_AFTER_MS) return 'sleep';
   if (a.status !== 'idle' && age > RELAX_AFTER_MS) return 'idle';
@@ -62,7 +67,7 @@ function renderFloor() {
     pod.setAttribute('role', 'button');
     pod.setAttribute('aria-label', `${a.name}, ${a.role || 'agent'}`);
     pod.innerHTML = `
-      ${i < 9 ? `<kbd class="keycap">${i + 1}</kbd>` : ''}
+      ${i < 10 ? `<kbd class="keycap">${(i + 1) % 10}</kbd>` : ''}
       <span class="status"></span>
       <div class="bubble" hidden></div>
       <div class="stage">${critterSVG(a)}<div class="zzz"><span>z</span><span>z</span><span>Z</span></div></div>
@@ -83,8 +88,80 @@ function renderFloor() {
     floor.appendChild(pod);
     updatePod(a.id);
   });
+  const empty = document.createElement('p');
+  empty.className = 'floor-empty';
+  empty.hidden = true;
+  floor.appendChild(empty);
+  applyDensity();
   updateSummary();
 }
+
+// ---------------------------------------------------------------------------
+// Filtering, search, density (for big crews)
+
+function filterKey(a) {
+  return a.status === 'working' || a.status === 'error' || a.status === 'done' ? a.status : 'idle';
+}
+
+function applyFilter() {
+  const q = state.search.trim().toLowerCase();
+  let shown = 0;
+  for (const a of state.agents.values()) {
+    const pod = podFor(a.id);
+    if (!pod) continue;
+    const matches =
+      (state.filter === 'all' || filterKey(a) === state.filter) &&
+      (!q || `${a.name} ${a.role} ${a.id}`.toLowerCase().includes(q));
+    pod.hidden = !matches;
+    if (matches) shown++;
+  }
+  const empty = $('#floor .floor-empty');
+  if (empty) {
+    empty.hidden = shown > 0;
+    empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
+  }
+}
+
+function setFilter(filter) {
+  state.filter = filter;
+  document.querySelectorAll('.filter').forEach((b) => b.classList.toggle('active', b.dataset.filter === filter));
+  applyFilter();
+}
+
+function isCompact() {
+  return state.density === 'compact' || (state.density === 'auto' && state.agents.size > AUTO_COMPACT_OVER);
+}
+
+function applyDensity() {
+  const compact = isCompact();
+  $('#floor').classList.toggle('compact', compact);
+  $('#densityBtn').setAttribute('aria-pressed', String(compact));
+  $('#densityBtn').textContent = compact ? '▦ Compact' : '▢ Cozy';
+}
+
+function toggleDensity() {
+  state.density = isCompact() ? 'cozy' : 'compact';
+  writePref('density', state.density);
+  applyDensity();
+}
+
+document.querySelectorAll('.filter').forEach((b) => b.addEventListener('click', () => setFilter(b.dataset.filter)));
+$('#search').addEventListener('input', (e) => {
+  state.search = e.target.value;
+  applyFilter();
+});
+$('#search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.target.value = '';
+    state.search = '';
+    applyFilter();
+    e.target.blur();
+  } else if (e.key === 'Enter') {
+    const first = [...state.agents.values()].find((a) => !podFor(a.id)?.hidden);
+    if (first) openDrawer(first.id);
+  }
+});
+$('#densityBtn').addEventListener('click', toggleDensity);
 
 function updatePod(id) {
   const a = state.agents.get(id);
@@ -128,10 +205,20 @@ function updateSummary() {
   const all = [...state.agents.values()];
   const working = all.filter((a) => a.status === 'working').length;
   const wins = all.reduce((n, a) => n + a.stats.wins, 0);
+  const failed = all.filter((a) => a.status === 'error').length;
   $('#summary').textContent =
     `${all.length} agent${all.length === 1 ? '' : 's'} · ` +
     (working ? `${working} hard at work` : 'everyone is chilling') +
+    (failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention` : '') +
     ` · ${wins} quest${wins === 1 ? '' : 's'} completed`;
+
+  const counts = { all: all.length, working: 0, error: 0, done: 0, idle: 0 };
+  for (const a of all) counts[filterKey(a)]++;
+  document.querySelectorAll('.filter').forEach((b) => {
+    b.querySelector('b').textContent = counts[b.dataset.filter];
+    b.classList.toggle('has', counts[b.dataset.filter] > 0);
+  });
+  applyFilter();
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +236,9 @@ async function openDrawer(id) {
   $('#drawerRole').textContent = a.role || 'Agent';
   $('#drawerCmd').textContent = `$ ${a.command}`;
   $('#drawerCmd').title = a.command;
+  $('#ideBtn').hidden = !a.ide;
+  $('#ideBtn').textContent = `Open in ${a.ide} ↗`;
+  $('#ideBtn').title = a.cwd;
   $('#drawer').classList.add('open');
   $('#drawer').setAttribute('aria-hidden', 'false');
   $('#scrim').classList.add('open');
@@ -278,21 +368,63 @@ $('#prompt').addEventListener('keydown', (e) => {
 });
 $('#stopBtn').addEventListener('click', () => api(`/api/agents/${encodeURIComponent(state.selected)}/stop`).catch((e) => toast(e.message)));
 $('#clearBtn').addEventListener('click', () => api(`/api/agents/${encodeURIComponent(state.selected)}/clear`).catch((e) => toast(e.message)));
+$('#ideBtn').addEventListener('click', async () => {
+  const a = state.agents.get(state.selected);
+  if (!a) return;
+  try {
+    await api(`/api/agents/${encodeURIComponent(a.id)}/open-ide`);
+    toast(`↗ Opening ${a.name}'s project in ${a.ide}`);
+  } catch (err) {
+    toast(`⚠️ ${err.message}`);
+  }
+});
 $('#closeDrawer').addEventListener('click', closeDrawer);
 $('#scrim').addEventListener('click', closeDrawer);
 
+// Party quest: pick several agents and send them the same prompt.
+function renderPicker() {
+  $('#picker').innerHTML = [...state.agents.values()]
+    .map((a) => {
+      const busy = a.status === 'working';
+      return `<label class="${busy ? 'busy' : ''}" title="${escapeHtml(a.role || a.name)}${busy ? ' (busy)' : ''}">
+        <input type="checkbox" value="${escapeHtml(a.id)}" ${busy ? 'disabled' : 'checked'} />
+        <span class="dot" style="background:${escapeHtml(a.color || '#a78bfa')}"></span>${escapeHtml(a.name)}</label>`;
+    })
+    .join('');
+  updatePickCount();
+}
+function pickedIds() {
+  return [...$('#picker').querySelectorAll('input:checked')].map((i) => i.value);
+}
+function updatePickCount() {
+  const n = pickedIds().length;
+  $('#pickCount').textContent = `${n} selected`;
+  $('#partyGo').textContent = n ? `Send to ${n}` : 'Send';
+  $('#partyGo').disabled = n === 0;
+}
+$('#picker').addEventListener('change', updatePickCount);
+$('#pickAll').addEventListener('click', () => {
+  $('#picker').querySelectorAll('input:not(:disabled)').forEach((i) => (i.checked = true));
+  updatePickCount();
+});
+$('#pickNone').addEventListener('click', () => {
+  $('#picker').querySelectorAll('input').forEach((i) => (i.checked = false));
+  updatePickCount();
+});
+
 $('#partyBtn').addEventListener('click', () => {
   $('#partyPrompt').value = '';
+  renderPicker();
   $('#partyDialog').showModal();
 });
 $('#partyDialog').addEventListener('close', async () => {
   if ($('#partyDialog').returnValue !== 'go') return;
   const prompt = $('#partyPrompt').value.trim();
-  const idle = [...state.agents.values()].filter((a) => a.status !== 'working');
+  const ids = pickedIds().filter((id) => state.agents.get(id)?.status !== 'working');
   if (!prompt) return;
-  if (!idle.length) return toast('Everyone is busy! 🫠');
-  toast(`📣 Sent to ${idle.length} agent${idle.length === 1 ? '' : 's'}`);
-  await Promise.all(idle.map((a) => sendQuest(a.id, prompt)));
+  if (!ids.length) return toast('Nobody available for that one 🫠');
+  toast(`📣 Sent to ${ids.length} agent${ids.length === 1 ? '' : 's'}`);
+  await Promise.all(ids.map((id) => sendQuest(id, prompt)));
 });
 
 $('#soundBtn').addEventListener('click', toggleSound);
@@ -310,11 +442,16 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.selected && !e.target.closest('dialog')) return closeDrawer();
   if (e.target.closest('textarea, input, dialog')) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (/^[1-9]$/.test(e.key)) {
-    const a = [...state.agents.values()][Number(e.key) - 1];
+  if (/^[0-9]$/.test(e.key)) {
+    const a = [...state.agents.values()][e.key === '0' ? 9 : Number(e.key) - 1];
     if (a) openDrawer(a.id);
   } else if (e.key === 'm') toggleSound();
   else if (e.key === 'p') $('#partyBtn').click();
+  else if (e.key === 'c') toggleDensity();
+  else if (e.key === '/') {
+    e.preventDefault();
+    $('#search').focus();
+  }
 });
 
 // ---------------------------------------------------------------------------

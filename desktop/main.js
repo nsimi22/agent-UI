@@ -3,6 +3,7 @@
 
 const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, shell, dialog } = require('electron');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const arcade = require('../server');
 
@@ -63,7 +64,30 @@ function arcadePaths() {
 // ---------------------------------------------------------------------------
 // Boot
 
+// Apps launched from the Dock/Finder/start menu get a bare-bones PATH, so
+// agent CLIs (claude, aider, …) and editor launchers (cursor, code, idea, …)
+// wouldn't be found. Borrow the PATH from the user's login shell instead.
+function adoptShellPath() {
+  if (process.platform === 'win32') return;
+  const shellBin = process.env.SHELL || (IS_MAC ? '/bin/zsh' : '/bin/bash');
+  try {
+    const out = execFileSync(shellBin, ['-ilc', 'printf "__PATH__%s__PATH__" "$PATH"'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const m = out.match(/__PATH__(.*)__PATH__/);
+    if (m && m[1]) {
+      const merged = new Set([...m[1].split(':'), ...(process.env.PATH || '').split(':')].filter(Boolean));
+      process.env.PATH = [...merged].join(':');
+    }
+  } catch {
+    // Keep the PATH we have; agents with absolute command paths still work.
+  }
+}
+
 async function boot() {
+  adoptShellPath();
   const base = { ...arcadePaths(), nodeBinary: process.execPath, defaultCwd: app.getPath('home') };
   try {
     try {

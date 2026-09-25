@@ -24,13 +24,26 @@
     <div class="top-actions">
       <span class="conn" id="conn" title="Live connection"><i></i><span>offline</span></span>
       <button class="btn ghost" id="soundBtn" title="Toggle sounds (M)" aria-pressed="true">🔊</button>
-      <button class="btn primary" id="partyBtn" title="Send one quest to every idle agent (P)">📣 Party quest</button>
+      <button class="btn primary" id="partyBtn" title="Send one quest to several agents at once (P)">📣 Party quest</button>
     </div>
   </header>
 
   <main>
+    <div class="toolbar">
+      <div class="filters" id="filters" role="group" aria-label="Filter agents">
+        <button class="filter active" data-filter="all">All <b></b></button>
+        <button class="filter" data-filter="working">⚙️ Working <b></b></button>
+        <button class="filter" data-filter="error">💥 Failed <b></b></button>
+        <button class="filter" data-filter="done">✅ Done <b></b></button>
+        <button class="filter" data-filter="idle">💤 Idle <b></b></button>
+      </div>
+      <div class="toolbar-right">
+        <input type="search" id="search" placeholder="Find agent…  /" aria-label="Find agent" />
+        <button class="btn ghost" id="densityBtn" title="Toggle compact layout (C)">▦ Compact</button>
+      </div>
+    </div>
     <section class="floor" id="floor" aria-label="Agents"></section>
-    <p class="hint">Click an agent (or press <kbd>1</kbd>–<kbd>9</kbd>) to give it a quest. Add your own agents in <code>agents.json</code>.</p>
+    <p class="hint">Click an agent (or press <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd>) to give it a quest. Add your own agents in <code>agents.json</code>.</p>
   </main>
 
   <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawerName">
@@ -40,6 +53,7 @@
         <h2 id="drawerName">Agent</h2>
         <p id="drawerRole"></p>
         <code id="drawerCmd"></code>
+        <button class="btn ghost small" id="ideBtn" hidden>Open in IDE ↗</button>
       </div>
       <button class="btn ghost icon" id="closeDrawer" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
@@ -59,11 +73,16 @@
   <dialog id="partyDialog">
     <form method="dialog" id="partyForm">
       <h2>📣 Party quest</h2>
-      <p>Every idle agent gets this quest at the same time.</p>
+      <p>Pick who gets it. Agents that are already working are skipped.</p>
+      <div class="pick-head">
+        <span id="pickCount"></span>
+        <span><button type="button" class="linkish" id="pickAll">All idle</button> · <button type="button" class="linkish" id="pickNone">None</button></span>
+      </div>
+      <div class="picker" id="picker"></div>
       <textarea id="partyPrompt" rows="3" placeholder="e.g. Summarize what changed in this repo today" required></textarea>
       <div class="composer-actions">
         <button value="cancel" class="btn ghost" formnovalidate>Cancel</button>
-        <button value="go" class="btn primary">Send to everyone</button>
+        <button value="go" class="btn primary" id="partyGo">Send</button>
       </div>
     </form>
   </dialog>

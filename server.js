@@ -35,6 +35,7 @@ function resolveConfigPath() {
 function loadConfig() {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   const list = Array.isArray(raw) ? raw : raw.agents;
+  const defaultIde = Array.isArray(raw) ? null : raw.ide || null;
   if (!Array.isArray(list) || list.length === 0) {
     throw new Error(`${CONFIG_PATH} must contain a non-empty "agents" array`);
   }
@@ -55,8 +56,80 @@ function loadConfig() {
       cwd: a.cwd ? path.resolve(ROOT, a.cwd.replace(/^~(?=$|\/)/, os.homedir())) : options.defaultCwd || process.cwd(),
       env: a.env && typeof a.env === 'object' ? a.env : {},
       timeoutSec: Number(a.timeoutSec) || 0,
+      ide: resolveIde(a.ide === undefined ? defaultIde : a.ide),
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// IDEs ("Open in Cursor" etc.)
+
+// cli: the launcher on PATH. mac: the app name for `open -a` when the CLI
+// isn't installed (common for GUI-launched apps on macOS).
+const IDES = {
+  cursor: { label: 'Cursor', cli: 'cursor', mac: 'Cursor' },
+  vscode: { label: 'VS Code', cli: 'code', mac: 'Visual Studio Code' },
+  code: { label: 'VS Code', cli: 'code', mac: 'Visual Studio Code' },
+  insiders: { label: 'VS Code Insiders', cli: 'code-insiders', mac: 'Visual Studio Code - Insiders' },
+  windsurf: { label: 'Windsurf', cli: 'windsurf', mac: 'Windsurf' },
+  zed: { label: 'Zed', cli: 'zed', mac: 'Zed' },
+  idea: { label: 'IntelliJ IDEA', cli: 'idea', mac: 'IntelliJ IDEA', jetbrains: true },
+  webstorm: { label: 'WebStorm', cli: 'webstorm', mac: 'WebStorm', jetbrains: true },
+  pycharm: { label: 'PyCharm', cli: 'pycharm', mac: 'PyCharm', jetbrains: true },
+  goland: { label: 'GoLand', cli: 'goland', mac: 'GoLand', jetbrains: true },
+  rider: { label: 'Rider', cli: 'rider', mac: 'Rider', jetbrains: true },
+  phpstorm: { label: 'PhpStorm', cli: 'phpstorm', mac: 'PhpStorm', jetbrains: true },
+  rubymine: { label: 'RubyMine', cli: 'rubymine', mac: 'RubyMine', jetbrains: true },
+  clion: { label: 'CLion', cli: 'clion', mac: 'CLion', jetbrains: true },
+  rustrover: { label: 'RustRover', cli: 'rustrover', mac: 'RustRover', jetbrains: true },
+};
+
+// "cursor" | { "label": "Sublime", "command": "subl", "args": ["{path}"] } | null
+function resolveIde(ide) {
+  if (!ide) return null;
+  if (typeof ide === 'string') {
+    const known = IDES[ide.toLowerCase()];
+    if (!known) throw new Error(`unknown ide "${ide}" (try: ${Object.keys(IDES).join(', ')})`);
+    return { ...known, args: ['{path}'] };
+  }
+  if (!ide.command) throw new Error('a custom "ide" needs a "command"');
+  return { label: ide.label || ide.command, cli: ide.command, args: Array.isArray(ide.args) ? ide.args.map(String) : ['{path}'] };
+}
+
+function launch(command, args) {
+  return new Promise((resolve, reject) => {
+    // Windows editor launchers are .cmd scripts, which need a shell.
+    const win = process.platform === 'win32';
+    const child = spawn(command, win ? args.map((x) => `"${x}"`) : args, {
+      detached: true,
+      stdio: 'ignore',
+      shell: win,
+    });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function openInIde(a) {
+  const { ide, cwd } = a.cfg;
+  if (!ide) throw new Error(`${a.cfg.name} has no "ide" set in the agents config`);
+  const args = ide.args.map((x) => x.split('{path}').join(cwd));
+  try {
+    await launch(ide.cli, args);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    if (process.platform === 'darwin' && ide.mac) {
+      await launch('open', ['-a', ide.mac, cwd]);
+      return;
+    }
+    const hint = ide.jetbrains
+      ? 'Turn on shell scripts in JetBrains Toolbox (Settings → Tools → Shell scripts).'
+      : `Install the "${ide.cli}" command from ${ide.label}'s command palette.`;
+    throw new Error(`Couldn't find "${ide.cli}" on your PATH. ${hint}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +184,8 @@ function publicAgent(a) {
     color: a.cfg.color,
     hat: a.cfg.hat,
     command: [a.cfg.command, ...a.cfg.args].join(' '),
+    cwd: a.cfg.cwd,
+    ide: a.cfg.ide ? a.cfg.ide.label : null,
     status: a.status,
     task: a.task,
     startedAt: a.startedAt,
@@ -156,6 +231,7 @@ function setStatus(a, status) {
 function runAgent(a, prompt) {
   if (a.proc) return { error: `${a.cfg.name} is busy` };
   const { cfg } = a;
+  if (!fs.existsSync(cfg.cwd)) return { error: `${cfg.name}'s folder doesn't exist: ${cfg.cwd}` };
   const args = cfg.args.map((arg) => arg.split('{prompt}').join(prompt));
   let command = cfg.command;
   const env = { ...process.env, ...cfg.env, FORCE_COLOR: '0', NO_COLOR: '1' };
@@ -329,7 +405,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, [...agents.values()].map(publicAgent));
   }
 
-  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear)$/);
+  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide)$/);
   if (m) {
     const a = agents.get(decodeURIComponent(m[1]));
     if (!a) return sendJson(res, 404, { error: 'unknown agent' });
@@ -354,6 +430,14 @@ const server = http.createServer(async (req, res) => {
     if (action === 'stop') {
       const r = stopAgent(a);
       return sendJson(res, r.error ? 409 : 200, r);
+    }
+    if (action === 'open-ide') {
+      try {
+        await openInIde(a);
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        return sendJson(res, 500, { error: err.message });
+      }
     }
     if (action === 'clear') {
       if (a.proc) return sendJson(res, 409, { error: 'stop the agent first' });
