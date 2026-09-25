@@ -231,6 +231,7 @@ function publicAgent(a) {
     hashKey: a.cfg.hashKey || a.cfg.id, // picks the critter's colour and hat
     command: [a.cfg.command, ...a.cfg.args].join(' '),
     cwd: a.cfg.cwd,
+    where: a.cfg.where || a.cfg.cwd, // cwd with ~ for display
     ide: a.cfg.ide ? a.cfg.ide.label : null,
     status: a.status,
     task: a.task,

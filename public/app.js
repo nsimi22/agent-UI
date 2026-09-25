@@ -264,7 +264,7 @@ async function openDrawer(id) {
   $('#drawerAvatar').innerHTML = critterSVG(a);
   $('#drawerName').textContent = a.name;
   $('#drawerRole').textContent = a.role || 'Agent';
-  $('#drawerCmd').textContent = isWatched(a) ? `watching ${a.command} in ${a.cwd}` : `$ ${a.command}`;
+  $('#drawerCmd').textContent = isWatched(a) ? `watching ${a.command} in ${a.where}` : `$ ${a.command}`;
   $('#drawerCmd').title = a.command;
   $('#ideBtn').hidden = !a.ide;
   $('#ideBtn').textContent = `Open in ${a.ide} ↗`;

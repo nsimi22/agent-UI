@@ -19,7 +19,9 @@ npm run desktop      # or `npm start` and open http://127.0.0.1:4321
 
 Then start `claude` or `codex` in any terminal. The session appears on the floor within a second. Sessions that were already running show up after their next event.
 
-`npm run connect` merges a few hooks into `~/.claude/settings.json` and `~/.codex/config.toml`. Your other settings are kept, a backup is saved next to each file (`*.arcade-backup`), and it's safe to run again. `npm run disconnect` removes exactly what it added. In the desktop app, the same switch is **Connect Claude Code & Codex…** in the tray menu.
+**One extra step for Codex:** Codex only runs hooks you've approved. Open `codex`, type `/hooks`, and trust the Agent Arcade hooks once. Until you do, Codex sessions still appear, but they only report finished turns (through Codex's `notify` setting). After that you get the full picture: working, waiting for approval, and done.
+
+`npm run connect` merges a few hooks into `~/.claude/settings.json` and `~/.codex/hooks.json`, and adds one `notify` line to `~/.codex/config.toml` (unless you already have a `notify` setting, which it leaves alone). Your other settings are kept, a backup is saved next to each file (`*.arcade-backup`), and it's safe to run again. `npm run disconnect` removes exactly what it added. In the desktop app, the same switch is **Connect Claude Code & Codex…** in the tray menu.
 
 The hooks never slow your agent down or change what it does: they print nothing, give up after 2 seconds, and do nothing if the arcade isn't running.
 
@@ -151,6 +153,7 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 - Commands come only from your config file. The browser can send prompts, but it can't choose what to execute.
 - Cross-origin `POST`s are refused, so other websites open in your browser can't start your agents.
 - An agent runs with your user's permissions, so configure it the way you would in a terminal.
+- Terminal sessions report to `POST /api/hooks/claude` and `/api/hooks/codex`. These accept only local requests, answer with an empty `204`, and never send anything back to the agent. The Claude Code transcript is only read from files under `~/.claude`.
 
 ## API (for tinkering)
 
@@ -159,3 +162,5 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 - `POST /api/agents/:id/run` with `{ "prompt": "..." }` starts a run
 - `POST /api/agents/:id/stop` and `/clear` stop a run and clear the transcript
 - `GET /api/agents/:id/transcript` returns the transcript
+- `POST /api/hooks/claude` and `/api/hooks/codex` receive hook events from your terminals
+- `POST /api/agents/:id/forget` dismisses a watched session

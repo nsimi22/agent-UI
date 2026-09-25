@@ -23,6 +23,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* beats display rules like .composer's flex */
 html, body { margin: 0; height: 100%; }
 body {
   background: radial-gradient(1200px 600px at 20% -10%, var(--bg-2), transparent 60%), var(--bg);

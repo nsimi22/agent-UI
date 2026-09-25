@@ -90,10 +90,45 @@ function lastClaudeReply(transcriptPath) {
 }
 
 // ---------------------------------------------------------------------------
-// Codex → actions (not wired up yet; events are ignored)
+// Codex → actions
+//
+// Codex has two channels. Its hooks (same shape as Claude Code's, and they
+// run once you trust them with /hooks in Codex) report everything. The
+// legacy `notify` program only reports finished turns, with kebab-case keys;
+// it's the fallback until the hooks are trusted.
 
-function fromCodex() {
-  return null;
+function fromCodex(e) {
+  if (e.type === 'agent-turn-complete') {
+    const cwd = e.cwd || null;
+    return {
+      sessionId: e['thread-id'] || `notify:${cwd || 'codex'}`,
+      cwd,
+      action: 'finish',
+      reply: e['last-assistant-message'] || null,
+      viaNotify: true,
+    };
+  }
+  const base = { sessionId: e.session_id, cwd: e.cwd };
+  switch (e.hook_event_name) {
+    case 'SessionStart':
+      return { ...base, action: 'start', note: e.source && e.source !== 'startup' ? `session ${e.source}` : 'session started' };
+    case 'UserPromptSubmit':
+      return { ...base, action: 'turn', prompt: e.prompt || '' };
+    case 'PreToolUse':
+      return { ...base, action: 'activity', text: describeTool(e.tool_name, e.tool_input) };
+    case 'PermissionRequest':
+      return { ...base, action: 'wait', text: `Approve ${describeTool(e.tool_name, e.tool_input)}?` };
+    case 'PostToolUse':
+      return { ...base, action: 'activity' };
+    case 'Stop':
+      return { ...base, action: 'finish', reply: e.last_assistant_message || null };
+    case 'Interrupt':
+      return { ...base, action: 'interrupt' };
+    case 'SessionEnd':
+      return { ...base, action: 'end' };
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +137,7 @@ function fromCodex() {
 function createWatch(arcade) {
   const { agents, makeAgent, pushTranscript, setStatus, award, broadcast, defaultIde } = arcade;
   const endedAt = new Map(); // agent id -> time the session ended
+  const hookedCwds = new Map(); // cwd -> last time a Codex *hook* event came from it
 
   function uniqueName(base, id) {
     const taken = new Set([...agents.values()].filter((a) => a.cfg.id !== id).map((a) => a.cfg.name));
@@ -109,7 +145,8 @@ function createWatch(arcade) {
     for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
   }
 
-  function sessionAgent(source, { sessionId, cwd }) {
+  function sessionAgent(source, act) {
+    const { sessionId, cwd } = act;
     const id = `${source}:${sessionId}`;
     let a = agents.get(id);
     if (a) return a;
@@ -121,7 +158,8 @@ function createWatch(arcade) {
       kind: 'watch',
       source,
       name: uniqueName(path.basename(dir) || 'session', id),
-      role: `${SOURCES[source].label} · ${where}`,
+      role: SOURCES[source].label, // the name is already the folder; the drawer shows the full path
+      where,
       command: SOURCES[source].command,
       args: [],
       cwd: dir,
@@ -129,6 +167,7 @@ function createWatch(arcade) {
       // Colour, hat and XP follow the project, not the individual session.
       hashKey: `${source}:${dir}`,
       statsKey: `watch:${source}:${dir}`,
+      viaNotify: Boolean(act.viaNotify),
     });
     agents.set(id, a);
     setStatus(a, 'idle'); // announces the new agent to clients
@@ -152,6 +191,7 @@ function createWatch(arcade) {
         broadcast('log', { id: a.cfg.id, text: `${a.cfg.name} is on it: “${act.prompt.slice(0, 60)}”` });
         break;
       case 'activity':
+        if (a.status === 'waiting') a.lastLine = null; // the "needs your permission" text is stale now
         if (act.text) pushTranscript(a, { kind: 'tool', text: `🔧 ${act.text}` }, act.text);
         if (a.status !== 'working') {
           a.startedAt = a.startedAt || Date.now();
@@ -164,6 +204,7 @@ function createWatch(arcade) {
         broadcast('log', { id: a.cfg.id, text: `${a.cfg.name} needs you: ${act.text}` });
         break;
       case 'finish': {
+        a.lastLine = null; // the reply's last line, if we have one, replaces tool/wait text
         if (act.reply) pushTranscript(a, { kind: 'out', text: `${act.reply}\n` });
         const secs = a.startedAt ? ((Date.now() - a.startedAt) / 1000).toFixed(1) : null;
         pushTranscript(a, { kind: 'sys', text: secs ? `✅ turn finished in ${secs}s` : '✅ turn finished' });
@@ -172,6 +213,10 @@ function createWatch(arcade) {
         broadcast('log', { id: a.cfg.id, text: `${a.cfg.name} finished a turn${secs ? ` in ${secs}s` : ''}` });
         break;
       }
+      case 'interrupt':
+        pushTranscript(a, { kind: 'sys', text: '⏹ interrupted' });
+        setStatus(a, 'idle');
+        break;
       case 'end':
         pushTranscript(a, { kind: 'sys', text: '👋 session ended' });
         endedAt.set(a.cfg.id, Date.now());
@@ -191,6 +236,18 @@ function createWatch(arcade) {
     if (!SOURCES[source] || !event || typeof event !== 'object') return false;
     const act = source === 'claude' ? fromClaude(event) : fromCodex(event);
     if (!act || !act.sessionId) return false;
+    if (source === 'codex') {
+      // Once a folder's Codex hooks are reporting, its notify pings are duplicates.
+      if (act.viaNotify) {
+        if (Date.now() - (hookedCwds.get(act.cwd) || 0) < IDLE_TTL_MS) return false;
+      } else {
+        hookedCwds.set(act.cwd, Date.now());
+        // Retire the notify-only stand-in for this folder.
+        for (const a of [...agents.values()]) {
+          if (a.cfg.source === 'codex' && a.cfg.viaNotify && a.cfg.cwd === (act.cwd || os.homedir())) remove(a.cfg.id);
+        }
+      }
+    }
     apply(source, act);
     return true;
   }
