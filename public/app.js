@@ -10,6 +10,7 @@ const ERROR_QUIPS = ['Oops…', 'That did not go well 😵', 'Help?', 'I blame c
 
 const state = {
   agents: new Map(), // id -> agent
+  pods: new Map(), // id -> cached pod elements
   transcripts: new Map(), // id -> entries
   bubbles: new Map(), // id -> text
   selected: null,
@@ -19,6 +20,7 @@ const state = {
   search: '',
 };
 const AUTO_COMPACT_OVER = 6; // agents
+const MAX_TRANSCRIPT = 400; // same cap as the server
 
 function readPref(key, fallback) {
   try {
@@ -48,17 +50,19 @@ function displayStatus(a) {
   return a.status;
 }
 const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', done: 'done', error: 'oops' };
+const STATUS_CLASSES = Object.keys(STATUS_LABEL).map((s) => `s-${s}`);
 
 // ---------------------------------------------------------------------------
 // Rendering the floor
 
 function podFor(id) {
-  return document.querySelector(`.pod[data-id="${CSS.escape(id)}"]`);
+  return state.pods.get(id)?.el;
 }
 
 function renderFloor() {
   const floor = $('#floor');
   floor.innerHTML = '';
+  state.pods.clear();
   [...state.agents.values()].forEach((a, i) => {
     const pod = document.createElement('article');
     pod.className = 'pod';
@@ -86,6 +90,16 @@ function renderFloor() {
       }
     });
     floor.appendChild(pod);
+    const q = (sel) => pod.querySelector(sel);
+    state.pods.set(a.id, {
+      el: pod,
+      status: q('.status'),
+      bubble: q('.bubble'),
+      lvl: q('.lvl'),
+      xpbar: q('.xpbar'),
+      xpfill: q('.xpbar i'),
+      timer: q('.timer'),
+    });
     updatePod(a.id);
   });
   const empty = document.createElement('p');
@@ -99,10 +113,6 @@ function renderFloor() {
 // ---------------------------------------------------------------------------
 // Filtering, search, density (for big crews)
 
-function filterKey(a) {
-  return a.status === 'working' || a.status === 'error' || a.status === 'done' ? a.status : 'idle';
-}
-
 function applyFilter() {
   const q = state.search.trim().toLowerCase();
   let shown = 0;
@@ -110,7 +120,7 @@ function applyFilter() {
     const pod = podFor(a.id);
     if (!pod) continue;
     const matches =
-      (state.filter === 'all' || filterKey(a) === state.filter) &&
+      (state.filter === 'all' || a.status === state.filter) &&
       (!q || `${a.name} ${a.role} ${a.id}`.toLowerCase().includes(q));
     pod.hidden = !matches;
     if (matches) shown++;
@@ -165,33 +175,40 @@ $('#densityBtn').addEventListener('click', toggleDensity);
 
 function updatePod(id) {
   const a = state.agents.get(id);
-  const pod = podFor(id);
-  if (!a || !pod) return;
+  const p = state.pods.get(id);
+  if (!a || !p) return;
   const ds = displayStatus(a);
-  pod.classList.remove('s-idle', 's-sleep', 's-working', 's-done', 's-error');
-  pod.classList.add(`s-${ds}`);
-  pod.classList.toggle('selected', state.selected === id);
-  pod.querySelector('.status').textContent = STATUS_LABEL[ds];
-  pod.querySelector('.lvl').textContent = `Lv ${a.stats.level}`;
-  pod.querySelector('.xpbar i').style.width = `${Math.round(a.stats.levelProgress * 100)}%`;
-  pod.querySelector('.xpbar').title = `${a.stats.xp} XP · ${a.stats.wins} wins · ${a.stats.fails} fails`;
-  updateTimer(a, pod);
+  p.el.classList.remove(...STATUS_CLASSES);
+  p.el.classList.add(`s-${ds}`);
+  p.el.classList.toggle('selected', state.selected === id);
+  p.status.textContent = STATUS_LABEL[ds];
+  p.lvl.textContent = `Lv ${a.stats.level}`;
+  p.xpfill.style.width = `${Math.round(a.stats.levelProgress * 100)}%`;
+  p.xpbar.title = `${a.stats.xp} XP · ${a.stats.wins} wins · ${a.stats.fails} fails`;
+  updateTimer(a);
 
-  const bubble = pod.querySelector('.bubble');
   const quips = ds === 'done' ? DONE_QUIPS : ds === 'error' ? ERROR_QUIPS : IDLE_QUIPS;
-  const text = state.bubbles.has(id) ? state.bubbles.get(id) : ds === 'sleep' ? '' : pick(quips);
-  if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, text);
-  bubble.hidden = !text;
-  if (bubble.textContent !== text) {
-    bubble.textContent = text;
-    bubble.style.animation = 'none';
-    void bubble.offsetWidth; // restart pop animation
-    bubble.style.animation = '';
+  if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, pick(quips));
+  setBubble(id, state.bubbles.get(id) || '');
+}
+
+// Only touches the bubble, so streaming output doesn't re-render the pod.
+function setBubble(id, text) {
+  state.bubbles.set(id, text);
+  const p = state.pods.get(id);
+  if (!p || p.bubble.textContent === text) return;
+  p.bubble.hidden = !text;
+  p.bubble.textContent = text;
+  // Pop in on mood changes, but not on every line of streaming output.
+  if (state.agents.get(id)?.status !== 'working' || text === 'On it! 🏃') {
+    p.bubble.style.animation = 'none';
+    void p.bubble.offsetWidth; // restart the pop animation
+    p.bubble.style.animation = '';
   }
 }
 
-function updateTimer(a, pod = podFor(a.id)) {
-  const el = pod && pod.querySelector('.timer');
+function updateTimer(a) {
+  const el = state.pods.get(a.id)?.timer;
   if (!el) return;
   if (a.status === 'working' && a.startedAt) {
     const s = Math.floor((Date.now() - a.startedAt) / 1000);
@@ -213,7 +230,7 @@ function updateSummary() {
     ` · ${wins} quest${wins === 1 ? '' : 's'} completed`;
 
   const counts = { all: all.length, working: 0, error: 0, done: 0, idle: 0 };
-  for (const a of all) counts[filterKey(a)]++;
+  for (const a of all) counts[a.status]++;
   document.querySelectorAll('.filter').forEach((b) => {
     b.querySelector('b').textContent = counts[b.dataset.filter];
     b.classList.toggle('has', counts[b.dataset.filter] > 0);
@@ -244,12 +261,7 @@ async function openDrawer(id) {
   $('#scrim').classList.add('open');
   updateDrawer();
   if (!state.transcripts.has(id)) {
-    try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(id)}/transcript`);
-      state.transcripts.set(id, await res.json());
-    } catch {
-      state.transcripts.set(id, []);
-    }
+    state.transcripts.set(id, await agentApi(id, 'transcript', null, 'GET').catch(() => []));
   }
   renderTranscript();
   setTimeout(() => $('#prompt').focus(), 250);
@@ -284,6 +296,16 @@ function updateDrawer() {
     .join('');
 }
 
+const isOutput = (e) => e.kind === 'out' || e.kind === 'err';
+
+function entryNode(e) {
+  const el = document.createElement(isOutput(e) ? 'pre' : 'div');
+  el.className = `msg-${e.kind}`;
+  // Always give the element a Text node so later chunks can appendData to it.
+  el.appendChild(document.createTextNode(isOutput(e) ? e.text : e.text.trim()));
+  return el;
+}
+
 function renderTranscript() {
   const box = $('#transcript');
   const a = state.agents.get(state.selected);
@@ -292,28 +314,32 @@ function renderTranscript() {
   if (!entries.length) {
     box.innerHTML = `<div class="empty"><big>🗺️</big>No quests yet.<br/>Tell ${escapeHtml(a ? a.name : 'them')} what to do!</div>`;
   }
-  for (const e of entries) appendEntry(e, false);
+  // Build everything off-DOM, merging consecutive output chunks, then insert once.
+  const frag = document.createDocumentFragment();
+  let last = null;
+  for (const e of entries) {
+    if (isOutput(e) && last && last.kind === e.kind) last.node.firstChild.appendData(e.text);
+    else frag.appendChild((last = { kind: e.kind, node: entryNode(e) }).node);
+  }
+  box.appendChild(frag);
   syncTyping();
   box.scrollTop = box.scrollHeight;
 }
 
-function appendEntry(e, scroll = true) {
+function appendEntry(e) {
   const box = $('#transcript');
-  box.querySelector('.empty')?.remove();
-  const typing = box.querySelector('.typing');
+  if (box.firstElementChild?.classList.contains('empty')) box.firstElementChild.remove();
+  const typing = box.lastElementChild?.classList.contains('typing') ? box.lastElementChild : null;
   const last = typing ? typing.previousElementSibling : box.lastElementChild;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
 
   // Merge consecutive output chunks into one block.
-  if ((e.kind === 'out' || e.kind === 'err') && last && last.classList.contains(`msg-${e.kind}`)) {
-    last.textContent += e.text;
+  if (isOutput(e) && last && last.classList.contains(`msg-${e.kind}`) && last.firstChild) {
+    last.firstChild.appendData(e.text);
   } else {
-    const el = document.createElement(e.kind === 'out' || e.kind === 'err' ? 'pre' : 'div');
-    el.className = `msg-${e.kind}`;
-    el.textContent = e.kind === 'out' || e.kind === 'err' ? e.text : e.text.trim();
-    box.insertBefore(el, typing);
+    box.insertBefore(entryNode(e), typing);
   }
-  if (scroll && nearBottom) box.scrollTop = box.scrollHeight;
+  if (nearBottom) box.scrollTop = box.scrollHeight;
 }
 
 function syncTyping() {
@@ -335,11 +361,11 @@ function syncTyping() {
 // ---------------------------------------------------------------------------
 // Actions
 
-async function api(path, body) {
-  const res = await fetch(path, {
-    method: 'POST',
+async function agentApi(id, action, body, method = 'POST') {
+  const res = await fetch(`/api/agents/${encodeURIComponent(id)}/${action}`, {
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+    body: method === 'GET' ? undefined : JSON.stringify(body || {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
@@ -348,7 +374,7 @@ async function api(path, body) {
 
 async function sendQuest(id, prompt) {
   try {
-    await api(`/api/agents/${encodeURIComponent(id)}/run`, { prompt });
+    await agentApi(id, 'run', { prompt });
     return true;
   } catch (err) {
     toast(`⚠️ ${err.message}`);
@@ -366,13 +392,14 @@ $('#composer').addEventListener('submit', async (e) => {
 $('#prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#composer').requestSubmit();
 });
-$('#stopBtn').addEventListener('click', () => api(`/api/agents/${encodeURIComponent(state.selected)}/stop`).catch((e) => toast(e.message)));
-$('#clearBtn').addEventListener('click', () => api(`/api/agents/${encodeURIComponent(state.selected)}/clear`).catch((e) => toast(e.message)));
+for (const action of ['stop', 'clear']) {
+  $(`#${action}Btn`).addEventListener('click', () => agentApi(state.selected, action).catch((e) => toast(e.message)));
+}
 $('#ideBtn').addEventListener('click', async () => {
   const a = state.agents.get(state.selected);
   if (!a) return;
   try {
-    await api(`/api/agents/${encodeURIComponent(a.id)}/open-ide`);
+    await agentApi(a.id, 'open-ide');
     toast(`↗ Opening ${a.name}'s project in ${a.ide}`);
   } catch (err) {
     toast(`⚠️ ${err.message}`);
@@ -427,16 +454,18 @@ $('#partyDialog').addEventListener('close', async () => {
   await Promise.all(ids.map((id) => sendQuest(id, prompt)));
 });
 
-$('#soundBtn').addEventListener('click', toggleSound);
+function renderSoundBtn() {
+  $('#soundBtn').textContent = state.sound ? '🔊' : '🔇';
+  $('#soundBtn').setAttribute('aria-pressed', String(state.sound));
+}
 function toggleSound() {
   state.sound = !state.sound;
   writePref('sound', state.sound);
-  $('#soundBtn').textContent = state.sound ? '🔊' : '🔇';
-  $('#soundBtn').setAttribute('aria-pressed', String(state.sound));
+  renderSoundBtn();
   if (state.sound) sfx('start');
 }
-$('#soundBtn').textContent = state.sound ? '🔊' : '🔇';
-$('#soundBtn').setAttribute('aria-pressed', String(state.sound));
+$('#soundBtn').addEventListener('click', toggleSound);
+renderSoundBtn();
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.selected && !e.target.closest('dialog')) return closeDrawer();
@@ -456,11 +485,6 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------------------
 // Live events
-
-function lastLine(text) {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  return lines.length ? lines[lines.length - 1] : null;
-}
 
 function connect() {
   const es = new EventSource('/api/events');
@@ -511,18 +535,15 @@ function connect() {
   });
 
   es.addEventListener('transcript', (ev) => {
-    const { id, entry } = JSON.parse(ev.data);
+    const { id, entry, lastLine } = JSON.parse(ev.data);
     const list = state.transcripts.get(id);
-    if (list) list.push(entry);
+    if (list) {
+      list.push(entry);
+      if (list.length > MAX_TRANSCRIPT * 1.25) list.splice(0, list.length - MAX_TRANSCRIPT);
+    }
     const a = state.agents.get(id);
     if (a) a.lastActivity = entry.t;
-    if (entry.kind === 'out' || entry.kind === 'err') {
-      const line = lastLine(entry.text);
-      if (line) {
-        state.bubbles.set(id, line);
-        updatePod(id);
-      }
-    }
+    if (isOutput(entry) && lastLine) setBubble(id, lastLine);
     if (state.selected === id && list) appendEntry(entry);
   });
 
@@ -541,9 +562,8 @@ function connect() {
   });
 
   es.addEventListener('levelup', (ev) => {
-    const { id, level } = JSON.parse(ev.data);
-    const a = state.agents.get(id);
-    toast(`⭐ ${a ? a.name : id} reached level ${level}!`, true);
+    const { id, name, level } = JSON.parse(ev.data);
+    toast(`⭐ ${name} reached level ${level}!`, true);
     sfx('levelup');
     confettiFrom(podFor(id), 160);
   });
@@ -554,7 +574,7 @@ setInterval(() => {
   for (const a of state.agents.values()) {
     const pod = podFor(a.id);
     if (!pod) continue;
-    if (a.status === 'working') updateTimer(a, pod);
+    if (a.status === 'working') updateTimer(a);
     const want = `s-${displayStatus(a)}`;
     if (!pod.classList.contains(want)) {
       if (want === 's-sleep') state.bubbles.set(a.id, '');
@@ -611,7 +631,6 @@ const canvas = $('#confetti');
 const ctx = canvas.getContext('2d');
 let particles = [];
 let rafId = null;
-const COLORS = ['#f472b6', '#fbbf24', '#5eead4', '#a78bfa', '#60a5fa', '#4ade80'];
 
 function confettiFrom(el, count = 70) {
   if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -629,7 +648,7 @@ function confettiFrom(el, count = 70) {
       vr: (Math.random() - 0.5) * 0.4,
       w: 6 + Math.random() * 6,
       h: 4 + Math.random() * 4,
-      color: pick(COLORS),
+      color: pick(PALETTE),
       life: 0,
     });
   }

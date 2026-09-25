@@ -3,7 +3,7 @@
 
 const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, shell, dialog } = require('electron');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 const path = require('path');
 const arcade = require('../server');
 
@@ -16,9 +16,7 @@ let win = null;
 let tray = null;
 let instance = null; // what arcade.start() resolved with
 let quitting = false;
-const settings = loadSettings();
-const lastLine = new Map(); // agent id -> latest output line, for notification text
-const lastStatus = new Map();
+const settings = { notifications: true, ...arcade.readJson(settingsFile(), {}) };
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -34,17 +32,8 @@ function settingsFile() {
   return path.join(app.getPath('userData'), 'desktop-settings.json');
 }
 
-function loadSettings() {
-  try {
-    return { notifications: true, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) };
-  } catch {
-    return { notifications: true };
-  }
-}
-
 function saveSettings() {
-  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-  fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
+  arcade.writeJson(settingsFile(), settings);
 }
 
 // Running from a checkout uses the repo's agents.local.json / agents.json and
@@ -67,45 +56,38 @@ function arcadePaths() {
 // Apps launched from the Dock/Finder/start menu get a bare-bones PATH, so
 // agent CLIs (claude, aider, …) and editor launchers (cursor, code, idea, …)
 // wouldn't be found. Borrow the PATH from the user's login shell instead.
+// Runs in the background (shell startup can take seconds); agents only need it
+// once you start one.
 function adoptShellPath() {
   if (process.platform === 'win32') return;
   const shellBin = process.env.SHELL || (IS_MAC ? '/bin/zsh' : '/bin/bash');
-  try {
-    const out = execFileSync(shellBin, ['-ilc', 'printf "__PATH__%s__PATH__" "$PATH"'], {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const m = out.match(/__PATH__(.*)__PATH__/);
-    if (m && m[1]) {
-      const merged = new Set([...m[1].split(':'), ...(process.env.PATH || '').split(':')].filter(Boolean));
-      process.env.PATH = [...merged].join(':');
-    }
-  } catch {
-    // Keep the PATH we have; agents with absolute command paths still work.
-  }
+  const opts = { encoding: 'utf8', timeout: 5000 };
+  execFile(shellBin, ['-ilc', 'printf "__PATH__%s__PATH__" "$PATH"'], opts, (err, out) => {
+    const m = !err && out.match(/__PATH__(.*)__PATH__/);
+    if (!m || !m[1]) return; // keep the PATH we have; absolute commands still work
+    const merged = new Set([...m[1].split(':'), ...(process.env.PATH || '').split(':')].filter(Boolean));
+    process.env.PATH = [...merged].join(':');
+  });
 }
 
 async function boot() {
   nativeTheme.themeSource = 'dark'; // dark title bar, menus and dialogs everywhere
   adoptShellPath();
-  const base = { ...arcadePaths(), nodeBinary: process.execPath, defaultCwd: app.getPath('home') };
   try {
-    try {
-      instance = await arcade.start({ ...base, port: PREFERRED_PORT });
-    } catch (err) {
-      if (err.code !== 'EADDRINUSE') throw err;
-      instance = await arcade.start({ ...base, port: 0 }); // something else has 4321
-    }
+    instance = await arcade.start({
+      ...arcadePaths(),
+      nodeBinary: process.execPath,
+      defaultCwd: app.getPath('home'),
+      port: PREFERRED_PORT,
+      fallbackPort: 0, // any free port if something else has 4321
+    });
   } catch (err) {
     dialog.showErrorBox('Agent Arcade could not start', `${err.message}\n\nCheck your agents config and try again.`);
     app.exit(1);
     return;
   }
 
-  for (const a of instance.snapshot()) lastStatus.set(a.id, a.status);
   instance.bus.on('agent', onAgent);
-  instance.bus.on('transcript', onTranscript);
   instance.bus.on('levelup', onLevelUp);
 
   if (IS_MAC) app.dock.setIcon(path.join(ASSETS, 'icon.png'));
@@ -186,15 +168,21 @@ function trayImage(busy) {
 
 function createTray() {
   tray = new Tray(trayImage(false));
-  tray.on('click', () => (IS_MAC ? null : win && win.isVisible() && win.isFocused() ? win.hide() : showWindow()));
+  // macOS opens the menu on click; elsewhere a click toggles the window.
+  if (!IS_MAC) tray.on('click', () => (win && win.isVisible() && win.isFocused() ? win.hide() : showWindow()));
   refreshTray();
 }
 
 const STATUS_ICON = { idle: '💤', working: '⚙️', done: '✅', error: '💥' };
+let trayKey = '';
 
 function refreshTray() {
   if (!tray || !instance) return;
   const agents = instance.snapshot();
+  // Only rebuild the native menu when something it shows has changed.
+  const key = JSON.stringify(agents.map((a) => [a.status, a.stats.level, a.task]));
+  if (key === trayKey) return;
+  trayKey = key;
   const working = agents.filter((a) => a.status === 'working');
 
   tray.setImage(trayImage(working.length > 0));
@@ -254,26 +242,15 @@ function refreshTraySoon() {
 // ---------------------------------------------------------------------------
 // Events -> notifications
 
+// The server only reports "done"/"error" at the end of a run.
 function onAgent(a) {
-  const prev = lastStatus.get(a.id);
-  lastStatus.set(a.id, a.status);
   refreshTraySoon();
-  if (prev !== 'working' || (a.status !== 'done' && a.status !== 'error')) return;
-
-  const line = lastLine.get(a.id);
-  if (a.status === 'done') notify(`${a.name} finished 🎉`, line || a.task || 'Quest complete!', a.id);
-  else notify(`${a.name} hit a snag 😵`, line || 'The run failed. Open it to see what happened.', a.id);
+  if (a.status === 'done') notify(`${a.name} finished 🎉`, a.lastLine || a.task || 'Quest complete!', a.id);
+  else if (a.status === 'error') notify(`${a.name} hit a snag 😵`, a.lastLine || 'The run failed. Open it to see what happened.', a.id);
 }
 
-function onTranscript({ id, entry }) {
-  if (entry.kind !== 'out' && entry.kind !== 'err') return;
-  const lines = entry.text.split('\n').map((l) => l.trim()).filter(Boolean);
-  if (lines.length) lastLine.set(id, lines[lines.length - 1].slice(0, 180));
-}
-
-function onLevelUp({ id, level }) {
-  const a = instance.snapshot().find((x) => x.id === id);
-  notify(`⭐ ${a ? a.name : id} reached level ${level}!`, 'Keep those quests coming.', id);
+function onLevelUp({ id, name, level }) {
+  notify(`⭐ ${name} reached level ${level}!`, 'Keep those quests coming.', id);
 }
 
 function notify(title, body, agentId) {

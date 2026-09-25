@@ -10,7 +10,7 @@
   --accent-ink: #120f24;
   --good: #4ade80;
   --bad: #f87171;
-  --warn: #fbbf24;
+  --gold: #fbbf24;
   --work: #60a5fa;
   --floor-a: #1a1536;
   --floor-b: #211a45;
@@ -109,7 +109,6 @@ main { padding: 8px clamp(16px, 4vw, 40px) 90px; }
   background:
     repeating-conic-gradient(var(--floor-a) 0 25%, var(--floor-b) 0 50%) 0 0 / 48px 48px;
   border: 3px solid var(--line);
-  box-shadow: inset 0 0 60px rgb(0 0 0 / 0.08);
 }
 .hint { text-align: center; color: var(--ink-soft); font-size: 14px; }
 
@@ -162,7 +161,7 @@ main { padding: 8px clamp(16px, 4vw, 40px) 90px; }
 .meta { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 12px; font-size: 12px; font-weight: 600; }
 .lvl { background: var(--ink); color: var(--bg); border-radius: 8px; padding: 2px 7px; }
 .xpbar { flex: 1; height: 10px; border-radius: 10px; background: var(--panel-2); border: 1.5px solid var(--line); overflow: hidden; }
-.xpbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #fbbf24, #f472b6); transition: width 0.6s cubic-bezier(.2,1.6,.4,1); }
+.xpbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--gold), #f472b6); transition: width 0.6s cubic-bezier(.2,1.6,.4,1); }
 .timer { font-family: var(--mono); color: var(--ink-soft); min-width: 3.5em; text-align: right; }
 
 /* compact layout for big crews */
@@ -194,11 +193,11 @@ main { padding: 8px clamp(16px, 4vw, 40px) 90px; }
 @keyframes look { 0%, 40%, 100% { transform: none; } 50%, 60% { transform: translateX(-2.5px); } 70%, 80% { transform: translateX(2.5px); } }
 
 .s-sleep .bodyg { animation-duration: 4s; }
-.s-sleep .eyes.open, .s-sleep .m-idle { display: none; }
+/* every mood except idle swaps out the default eyes and smile */
+:is(.s-sleep, .s-done, .s-error) :is(.eyes.open, .m-idle), .s-working .m-idle { display: none; }
 .s-sleep .eyes.sleepy, .s-sleep .m-sleep { display: inline; }
 
 .s-working .laptop, .s-working .m-working { display: inline; }
-.s-working .m-idle { display: none; }
 .s-working .bodyg { animation: busy 0.35s ease-in-out infinite; }
 .s-working .arm-l { animation: type 0.18s ease-in-out infinite alternate; transform-origin: 26px 72px; }
 .s-working .arm-r { animation: type 0.18s ease-in-out infinite alternate-reverse; transform-origin: 94px 72px; }
@@ -212,14 +211,12 @@ main { padding: 8px clamp(16px, 4vw, 40px) 90px; }
 @keyframes screen { 33% { fill: #a3e635; } 66% { fill: #f0abfc; } }
 @keyframes sweat { from { transform: translateY(0); opacity: 1; } to { transform: translateY(18px); opacity: 0; } }
 
-.s-done .eyes.open, .s-done .m-idle { display: none; }
 .s-done .eyes.happy, .s-done .m-done { display: inline; }
 .s-done .bodyg { animation: hop 0.9s cubic-bezier(.3,.7,.4,1) 3; }
 .s-done .arm-l { transform: rotate(-60deg) translate(-4px, -10px); transform-origin: 26px 72px; }
 .s-done .arm-r { transform: rotate(60deg) translate(4px, -10px); transform-origin: 94px 72px; }
 @keyframes hop { 0%, 100% { transform: none; } 20% { transform: scaleY(0.88) scaleX(1.06); } 50% { transform: translateY(-20px) scaleY(1.05); } 80% { transform: scaleY(0.95); } }
 
-.s-error .eyes.open, .s-error .m-idle { display: none; }
 .s-error .eyes.dizzy, .s-error .m-error { display: inline; }
 .s-error .bodyg { animation: shake 0.5s ease-in-out 2; filter: saturate(0.35); }
 .s-error .hat { transform: rotate(-14deg) translate(-6px, 4px); transform-origin: 60px 40px; }
@@ -300,7 +297,7 @@ dialog p { margin: 0 0 12px; color: var(--ink-soft); }
   border-top: 2px solid var(--line);
   font-family: var(--mono); font-size: 12.5px; z-index: 10;
 }
-.ticker-label { background: #fbbf24; color: #1f1b2e; padding: 1px 8px; border-radius: 6px; font-weight: 600; }
+.ticker-label { background: var(--gold); color: #1f1b2e; padding: 1px 8px; border-radius: 6px; font-weight: 600; }
 #ticker { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #ticker span { animation: slide-in 0.4s ease-out; display: inline-block; }
 #ticker time { opacity: 0.55; margin-right: 8px; }

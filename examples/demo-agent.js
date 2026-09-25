@@ -50,6 +50,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       console.error('💥 Something exploded. Smells like burnt toast.');
       process.exit(1);
     }
-    console.log(p.steps[i].split('{task}').join(task));
+    console.log(p.steps[i].replaceAll('{task}', task));
   }
 })();

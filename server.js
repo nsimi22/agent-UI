@@ -9,11 +9,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { stripVTControlCharacters } = require('util');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const MAX_TRANSCRIPT = 400; // entries kept per agent
+const OUTPUT_FLUSH_MS = 50; // coalesce chatty stdout into fewer events
 const XP_PER_LEVEL = 100;
+const levelOf = (xp) => Math.floor(xp / XP_PER_LEVEL) + 1;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -64,47 +67,67 @@ function loadConfig() {
 // ---------------------------------------------------------------------------
 // IDEs ("Open in Cursor" etc.)
 
-// cli: the launcher on PATH. mac: the app name for `open -a` when the CLI
-// isn't installed (common for GUI-launched apps on macOS).
+// cli: the launcher on PATH (defaults to the key). mac: the app name for
+// `open -a` when the CLI isn't installed (defaults to the label).
+const jetbrains = (label) => ({ label, jetbrains: true });
 const IDES = {
-  cursor: { label: 'Cursor', cli: 'cursor', mac: 'Cursor' },
+  cursor: { label: 'Cursor' },
   vscode: { label: 'VS Code', cli: 'code', mac: 'Visual Studio Code' },
-  code: { label: 'VS Code', cli: 'code', mac: 'Visual Studio Code' },
   insiders: { label: 'VS Code Insiders', cli: 'code-insiders', mac: 'Visual Studio Code - Insiders' },
-  windsurf: { label: 'Windsurf', cli: 'windsurf', mac: 'Windsurf' },
-  zed: { label: 'Zed', cli: 'zed', mac: 'Zed' },
-  idea: { label: 'IntelliJ IDEA', cli: 'idea', mac: 'IntelliJ IDEA', jetbrains: true },
-  webstorm: { label: 'WebStorm', cli: 'webstorm', mac: 'WebStorm', jetbrains: true },
-  pycharm: { label: 'PyCharm', cli: 'pycharm', mac: 'PyCharm', jetbrains: true },
-  goland: { label: 'GoLand', cli: 'goland', mac: 'GoLand', jetbrains: true },
-  rider: { label: 'Rider', cli: 'rider', mac: 'Rider', jetbrains: true },
-  phpstorm: { label: 'PhpStorm', cli: 'phpstorm', mac: 'PhpStorm', jetbrains: true },
-  rubymine: { label: 'RubyMine', cli: 'rubymine', mac: 'RubyMine', jetbrains: true },
-  clion: { label: 'CLion', cli: 'clion', mac: 'CLion', jetbrains: true },
-  rustrover: { label: 'RustRover', cli: 'rustrover', mac: 'RustRover', jetbrains: true },
+  windsurf: { label: 'Windsurf' },
+  zed: { label: 'Zed' },
+  idea: jetbrains('IntelliJ IDEA'),
+  webstorm: jetbrains('WebStorm'),
+  pycharm: jetbrains('PyCharm'),
+  goland: jetbrains('GoLand'),
+  rider: jetbrains('Rider'),
+  phpstorm: jetbrains('PhpStorm'),
+  rubymine: jetbrains('RubyMine'),
+  clion: jetbrains('CLion'),
+  rustrover: jetbrains('RustRover'),
 };
+IDES.code = IDES.vscode;
 
 // "cursor" | { "label": "Sublime", "command": "subl", "args": ["{path}"] } | null
 function resolveIde(ide) {
   if (!ide) return null;
   if (typeof ide === 'string') {
-    const known = IDES[ide.toLowerCase()];
+    const key = ide.toLowerCase();
+    const known = IDES[key];
     if (!known) throw new Error(`unknown ide "${ide}" (try: ${Object.keys(IDES).join(', ')})`);
-    return { ...known, args: ['{path}'] };
+    return { cli: key, mac: known.label, ...known, args: ['{path}'] };
   }
   if (!ide.command) throw new Error('a custom "ide" needs a "command"');
   return { label: ide.label || ide.command, cli: ide.command, args: Array.isArray(ide.args) ? ide.args.map(String) : ['{path}'] };
 }
 
-function launch(command, args) {
+// Resolve a command to a file on PATH (honouring PATHEXT on Windows), or null.
+function findOnPath(cmd) {
+  const exts = process.platform === 'win32' ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')] : [''];
+  const dirs = path.isAbsolute(cmd) || cmd.includes(path.sep) ? [''] : (process.env.PATH || '').split(path.delimiter);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const file = path.join(dir, cmd + ext);
+      try {
+        if (fs.statSync(file).isFile()) {
+          fs.accessSync(file, fs.constants.X_OK);
+          return file;
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+// Windows .cmd/.bat launchers (code.cmd, cursor.cmd, …) can only run via cmd.exe.
+const quoteForCmd = (s) => `"${String(s).replace(/"/g, '""')}"`;
+
+function launch(file, args) {
+  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(file);
   return new Promise((resolve, reject) => {
-    // Windows editor launchers are .cmd scripts, which need a shell.
-    const win = process.platform === 'win32';
-    const child = spawn(command, win ? args.map((x) => `"${x}"`) : args, {
-      detached: true,
-      stdio: 'ignore',
-      shell: win,
-    });
+    const child = viaCmd
+      ? spawn([file, ...args].map(quoteForCmd).join(' '), { shell: true, detached: true, stdio: 'ignore' })
+      : spawn(file, args, { detached: true, stdio: 'ignore' });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();
@@ -116,31 +139,29 @@ function launch(command, args) {
 async function openInIde(a) {
   const { ide, cwd } = a.cfg;
   if (!ide) throw new Error(`${a.cfg.name} has no "ide" set in the agents config`);
-  const args = ide.args.map((x) => x.split('{path}').join(cwd));
-  try {
-    await launch(ide.cli, args);
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-    if (process.platform === 'darwin' && ide.mac) {
-      await launch('open', ['-a', ide.mac, cwd]);
-      return;
-    }
-    const hint = ide.jetbrains
-      ? 'Turn on shell scripts in JetBrains Toolbox (Settings → Tools → Shell scripts).'
-      : `Install the "${ide.cli}" command from ${ide.label}'s command palette.`;
-    throw new Error(`Couldn't find "${ide.cli}" on your PATH. ${hint}`);
-  }
+  const bin = findOnPath(ide.cli);
+  if (bin) return launch(bin, ide.args.map((x) => x.replaceAll('{path}', cwd)));
+  if (process.platform === 'darwin' && ide.mac) return launch('open', ['-a', ide.mac, cwd]);
+  const hint = ide.jetbrains
+    ? 'Turn on shell scripts in JetBrains Toolbox (Settings → Tools → Shell scripts).'
+    : `Install the "${ide.cli}" command from ${ide.label}'s command palette.`;
+  throw new Error(`Couldn't find "${ide.cli}" on your PATH. ${hint}`);
 }
 
 // ---------------------------------------------------------------------------
 // State
 
-function loadStats() {
+function readJson(file, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    return {};
+    return fallback;
   }
+}
+
+function writeJson(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
 let statsSaveTimer = null;
@@ -149,15 +170,14 @@ function saveStatsSoon() {
   statsSaveTimer = setTimeout(() => {
     const out = {};
     for (const a of agents.values()) out[a.cfg.id] = a.stats;
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATS_FILE, JSON.stringify(out, null, 2));
+    writeJson(STATS_FILE, out);
   }, 300);
 }
 
 let agents = new Map();
 
 function loadAgents() {
-  const stats = loadStats();
+  const stats = readJson(STATS_FILE, {});
   agents = new Map(
     loadConfig().map((cfg) => [
       cfg.id,
@@ -169,6 +189,7 @@ function loadAgents() {
         lastActivity: Date.now(),
         proc: null,
         transcript: [],
+        lastLine: null, // latest non-blank output line of the current run
         stats: { xp: 0, runs: 0, wins: 0, fails: 0, ...(stats[cfg.id] || {}) },
       },
     ])
@@ -188,15 +209,18 @@ function publicAgent(a) {
     ide: a.cfg.ide ? a.cfg.ide.label : null,
     status: a.status,
     task: a.task,
+    lastLine: a.lastLine,
     startedAt: a.startedAt,
     lastActivity: a.lastActivity,
     stats: {
       ...a.stats,
-      level: Math.floor(xp / XP_PER_LEVEL) + 1,
+      level: levelOf(xp),
       levelProgress: (xp % XP_PER_LEVEL) / XP_PER_LEVEL,
     },
   };
 }
+
+const snapshot = () => [...agents.values()].map(publicAgent);
 
 // ---------------------------------------------------------------------------
 // Server-Sent Events
@@ -205,18 +229,32 @@ const clients = new Set();
 // In-process listeners (the desktop app uses this for tray + notifications).
 const bus = new EventEmitter();
 
+const sse = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
 function broadcast(event, data) {
   bus.emit(event, data);
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const payload = sse(event, data);
   for (const res of clients) res.write(payload);
+}
+
+function lastLineOf(text) {
+  for (let end = text.length; end > 0; ) {
+    const start = text.lastIndexOf('\n', end - 1);
+    const line = text.slice(start + 1, end).trim();
+    if (line) return line.slice(0, 180);
+    end = start;
+  }
+  return null;
 }
 
 function pushTranscript(a, entry) {
   const full = { t: Date.now(), ...entry };
   a.transcript.push(full);
-  if (a.transcript.length > MAX_TRANSCRIPT) a.transcript.splice(0, a.transcript.length - MAX_TRANSCRIPT);
+  // Trim in batches rather than shifting the array on every chunk.
+  if (a.transcript.length > MAX_TRANSCRIPT * 1.25) a.transcript.splice(0, a.transcript.length - MAX_TRANSCRIPT);
   a.lastActivity = full.t;
-  broadcast('transcript', { id: a.cfg.id, entry: full });
+  if (entry.kind === 'out' || entry.kind === 'err') a.lastLine = lastLineOf(entry.text) || a.lastLine;
+  broadcast('transcript', { id: a.cfg.id, entry: full, lastLine: a.lastLine });
 }
 
 function setStatus(a, status) {
@@ -232,7 +270,7 @@ function runAgent(a, prompt) {
   if (a.proc) return { error: `${a.cfg.name} is busy` };
   const { cfg } = a;
   if (!fs.existsSync(cfg.cwd)) return { error: `${cfg.name}'s folder doesn't exist: ${cfg.cwd}` };
-  const args = cfg.args.map((arg) => arg.split('{prompt}').join(prompt));
+  const args = cfg.args.map((arg) => arg.replaceAll('{prompt}', prompt));
   let command = cfg.command;
   const env = { ...process.env, ...cfg.env, FORCE_COLOR: '0', NO_COLOR: '1' };
   // Inside the desktop app there may be no `node` on PATH, so run Node
@@ -255,6 +293,7 @@ function runAgent(a, prompt) {
 
   a.proc = child;
   a.task = prompt;
+  a.lastLine = null;
   a.startedAt = Date.now();
   a.stats.runs += 1;
   pushTranscript(a, { kind: 'prompt', text: prompt });
@@ -266,13 +305,30 @@ function runAgent(a, prompt) {
     child.stdin.end(prompt + '\n');
   }
 
-  const onData = (kind) => (buf) => pushTranscript(a, { kind, text: stripAnsi(buf.toString('utf8')) });
+  // Buffer output briefly so a chatty agent sends a few events per second
+  // instead of one per pipe chunk.
+  let pending = null;
+  let flushTimer = null;
+  const flush = () => {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    if (pending) pushTranscript(a, pending);
+    pending = null;
+  };
+  const onData = (kind) => (buf) => {
+    const text = stripVTControlCharacters(buf.toString('utf8'));
+    if (pending && pending.kind !== kind) flush();
+    if (pending) pending.text += text;
+    else pending = { kind, text };
+    flushTimer ??= setTimeout(flush, OUTPUT_FLUSH_MS);
+  };
   child.stdout.on('data', onData('out'));
   child.stderr.on('data', onData('err'));
 
   let timer = null;
   if (cfg.timeoutSec > 0) {
     timer = setTimeout(() => {
+      flush();
       pushTranscript(a, { kind: 'sys', text: `⏰ timed out after ${cfg.timeoutSec}s` });
       child.kill('SIGTERM');
     }, cfg.timeoutSec * 1000);
@@ -283,10 +339,11 @@ function runAgent(a, prompt) {
     if (finished) return;
     finished = true;
     clearTimeout(timer);
+    flush();
     a.proc = null;
     const secs = ((Date.now() - a.startedAt) / 1000).toFixed(1);
     const ok = code === 0 && !spawnError;
-    const beforeLevel = Math.floor(a.stats.xp / XP_PER_LEVEL);
+    const levelBefore = levelOf(a.stats.xp);
     if (ok) {
       a.stats.wins += 1;
       a.stats.xp += 25 + Math.min(25, Math.round(Number(secs)));
@@ -294,7 +351,7 @@ function runAgent(a, prompt) {
       a.stats.fails += 1;
       a.stats.xp += 5; // participation trophy
     }
-    const leveledUp = Math.floor(a.stats.xp / XP_PER_LEVEL) > beforeLevel;
+    const level = levelOf(a.stats.xp);
     saveStatsSoon();
 
     const why = spawnError ? spawnError.message : signal ? `stopped (${signal})` : `exit ${code}`;
@@ -304,9 +361,8 @@ function runAgent(a, prompt) {
       id: cfg.id,
       text: ok ? `${cfg.name} completed a quest in ${secs}s` : `${cfg.name} stumbled: ${why}`,
     });
-    if (leveledUp) {
-      const level = Math.floor(a.stats.xp / XP_PER_LEVEL) + 1;
-      broadcast('levelup', { id: cfg.id, level });
+    if (level > levelBefore) {
+      broadcast('levelup', { id: cfg.id, name: cfg.name, level });
       broadcast('log', { id: cfg.id, text: `🎉 ${cfg.name} reached level ${level}!` });
     }
   };
@@ -391,7 +447,7 @@ const server = http.createServer(async (req, res) => {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    res.write(`event: hello\ndata: ${JSON.stringify({ agents: [...agents.values()].map(publicAgent) })}\n\n`);
+    res.write(sse('hello', { agents: snapshot() }));
     clients.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => {
@@ -402,7 +458,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/agents' && req.method === 'GET') {
-    return sendJson(res, 200, [...agents.values()].map(publicAgent));
+    return sendJson(res, 200, snapshot());
   }
 
   const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide)$/);
@@ -443,6 +499,7 @@ const server = http.createServer(async (req, res) => {
       if (a.proc) return sendJson(res, 409, { error: 'stop the agent first' });
       a.transcript = [];
       a.task = null;
+      a.lastLine = null;
       setStatus(a, 'idle');
       broadcast('cleared', { id: a.cfg.id });
       return sendJson(res, 200, { ok: true });
@@ -457,11 +514,6 @@ const server = http.createServer(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Helpers
 
-function stripAnsi(s) {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)/g, '');
-}
-
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
@@ -470,8 +522,20 @@ function stopAll() {
   for (const a of agents.values()) a.proc && a.proc.kill('SIGTERM');
 }
 
-// Start the arcade. Resolves with { url, port, server, bus, snapshot, stopAll }.
-function start(opts = {}) {
+function listen(port, host) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      resolve(server.address().port);
+    });
+  });
+}
+
+// Start the arcade. If `fallbackPort` is given (e.g. 0 for "any free port")
+// it's used when `port` is taken. Resolves with { url, configPath, bus,
+// snapshot, stopAll }.
+async function start(opts = {}) {
   options = opts;
   CONFIG_PATH = opts.configPath || resolveConfigPath();
   DATA_DIR = opts.dataDir || path.join(ROOT, 'data');
@@ -480,25 +544,17 @@ function start(opts = {}) {
 
   const host = opts.host || process.env.HOST || '127.0.0.1';
   const port = opts.port ?? (Number(process.env.PORT) || 4321);
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => {
-      server.off('error', reject);
-      const actual = server.address().port;
-      resolve({
-        url: `http://${host}:${actual}`,
-        port: actual,
-        configPath: CONFIG_PATH,
-        server,
-        bus,
-        snapshot: () => [...agents.values()].map(publicAgent),
-        stopAll,
-      });
-    });
-  });
+  let actual;
+  try {
+    actual = await listen(port, host);
+  } catch (err) {
+    if (err.code !== 'EADDRINUSE' || opts.fallbackPort === undefined) throw err;
+    actual = await listen(opts.fallbackPort, host);
+  }
+  return { url: `http://${host}:${actual}`, configPath: CONFIG_PATH, bus, snapshot, stopAll };
 }
 
-module.exports = { start };
+module.exports = { start, readJson, writeJson };
 
 if (require.main === module) {
   const shutdown = () => {
@@ -508,8 +564,8 @@ if (require.main === module) {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   start()
-    .then(({ url, configPath }) => {
-      const names = [...agents.values()].map((a) => a.cfg.name).join(', ');
+    .then(({ url, configPath, snapshot: list }) => {
+      const names = list().map((a) => a.name).join(', ');
       console.log(`\n  🕹️  Agent Arcade is open at ${url}`);
       console.log(`  📜 config: ${path.relative(process.cwd(), configPath) || configPath}`);
       console.log(`  🤖 agents: ${names}\n`);

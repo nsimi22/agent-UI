@@ -2,7 +2,6 @@
 // an ancestor (.s-idle, .s-working, .s-done, .s-error, .s-sleep).
 
 const PALETTE = ['#5eead4', '#fbbf24', '#f472b6', '#a78bfa', '#60a5fa', '#4ade80', '#fb923c', '#f87171'];
-const HATS = ['antenna', 'hardhat', 'horns', 'crown', 'wizard', 'headphones', 'cap', 'bow'];
 
 function hashString(s) {
   let h = 0;
@@ -17,46 +16,35 @@ function shade(hex, amt) {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
 
-function hatSVG(hat, color) {
-  const dark = shade(color, -0.35);
-  switch (hat) {
-    case 'antenna':
-      return `<g class="hat"><line x1="60" y1="34" x2="60" y2="14" stroke="${dark}" stroke-width="3" stroke-linecap="round"/>
-        <circle class="bulb" cx="60" cy="12" r="6"/></g>`;
-    case 'hardhat':
-      return `<g class="hat"><path d="M34 42 Q34 18 60 18 Q86 18 86 42 Z" fill="#facc15" stroke="#a16207" stroke-width="2"/>
+// Hat artwork (inner markup only; critterSVG wraps it in <g class="hat">).
+const HATS = {
+  antenna: (dark) => `<line x1="60" y1="34" x2="60" y2="14" stroke="${dark}" stroke-width="3" stroke-linecap="round"/>
+        <circle class="bulb" cx="60" cy="12" r="6"/>`,
+  hardhat: () => `<path d="M34 42 Q34 18 60 18 Q86 18 86 42 Z" fill="#facc15" stroke="#a16207" stroke-width="2"/>
         <rect x="28" y="39" width="64" height="7" rx="3.5" fill="#eab308" stroke="#a16207" stroke-width="2"/>
-        <rect x="56" y="18" width="8" height="22" rx="3" fill="#fde047"/></g>`;
-    case 'horns':
-      return `<g class="hat"><path d="M40 40 Q30 22 38 12 Q42 26 50 34 Z" fill="#fde68a" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/>
-        <path d="M80 40 Q90 22 82 12 Q78 26 70 34 Z" fill="#fde68a" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/></g>`;
-    case 'crown':
-      return `<g class="hat"><path d="M40 38 L38 16 L50 27 L60 12 L70 27 L82 16 L80 38 Z" fill="#fcd34d" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/>
-        <circle cx="60" cy="30" r="3.5" fill="#ef4444"/></g>`;
-    case 'wizard':
-      return `<g class="hat"><path d="M34 40 L64 2 L86 40 Z" fill="#6d28d9" stroke="#3b0764" stroke-width="2" stroke-linejoin="round"/>
+        <rect x="56" y="18" width="8" height="22" rx="3" fill="#fde047"/>`,
+  horns: () => `<path d="M40 40 Q30 22 38 12 Q42 26 50 34 Z" fill="#fde68a" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M80 40 Q90 22 82 12 Q78 26 70 34 Z" fill="#fde68a" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/>`,
+  crown: () => `<path d="M40 38 L38 16 L50 27 L60 12 L70 27 L82 16 L80 38 Z" fill="#fcd34d" stroke="#b45309" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="60" cy="30" r="3.5" fill="#ef4444"/>`,
+  wizard: () => `<path d="M34 40 L64 2 L86 40 Z" fill="#6d28d9" stroke="#3b0764" stroke-width="2" stroke-linejoin="round"/>
         <ellipse cx="60" cy="40" rx="32" ry="6" fill="#7c3aed" stroke="#3b0764" stroke-width="2"/>
-        <text x="58" y="30" font-size="12" text-anchor="middle">⭐</text></g>`;
-    case 'headphones':
-      return `<g class="hat"><path d="M28 62 Q28 22 60 22 Q92 22 92 62" fill="none" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
+        <text x="58" y="30" font-size="12" text-anchor="middle">⭐</text>`,
+  headphones: () => `<path d="M28 62 Q28 22 60 22 Q92 22 92 62" fill="none" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
         <rect x="20" y="54" width="14" height="22" rx="6" fill="#ef4444" stroke="#1f2937" stroke-width="2"/>
-        <rect x="86" y="54" width="14" height="22" rx="6" fill="#ef4444" stroke="#1f2937" stroke-width="2"/></g>`;
-    case 'cap':
-      return `<g class="hat"><path d="M36 42 Q36 20 60 20 Q84 20 84 42 Z" fill="#2563eb" stroke="#1e3a8a" stroke-width="2"/>
+        <rect x="86" y="54" width="14" height="22" rx="6" fill="#ef4444" stroke="#1f2937" stroke-width="2"/>`,
+  cap: () => `<path d="M36 42 Q36 20 60 20 Q84 20 84 42 Z" fill="#2563eb" stroke="#1e3a8a" stroke-width="2"/>
         <path d="M78 40 Q100 38 102 46 L80 46 Z" fill="#1d4ed8" stroke="#1e3a8a" stroke-width="2" stroke-linejoin="round"/>
-        <circle cx="60" cy="20" r="3" fill="#1e3a8a"/></g>`;
-    case 'bow':
-      return `<g class="hat"><path d="M60 30 L44 20 L44 40 Z M60 30 L76 20 L76 40 Z" fill="#fb7185" stroke="#9f1239" stroke-width="2" stroke-linejoin="round"/>
-        <circle cx="60" cy="30" r="5" fill="#e11d48" stroke="#9f1239" stroke-width="2"/></g>`;
-    default:
-      return '';
-  }
-}
+        <circle cx="60" cy="20" r="3" fill="#1e3a8a"/>`,
+  bow: () => `<path d="M60 30 L44 20 L44 40 Z M60 30 L76 20 L76 40 Z" fill="#fb7185" stroke="#9f1239" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="60" cy="30" r="5" fill="#e11d48" stroke="#9f1239" stroke-width="2"/>`,
+};
 
 function critterSVG(agent) {
   const h = hashString(agent.id);
   const color = agent.color || PALETTE[h % PALETTE.length];
-  const hat = agent.hat || HATS[(h >> 3) % HATS.length];
+  const names = Object.keys(HATS);
+  const hat = agent.hat || names[(h >> 3) % names.length];
   const dark = shade(color, -0.4);
   const light = shade(color, 0.45);
   return `
@@ -93,7 +81,7 @@ function critterSVG(agent) {
       <path class="mouth m-error" d="M53 84 Q60 77 67 84" fill="none" stroke="#111827" stroke-width="2.5" stroke-linecap="round"/>
       <ellipse class="mouth m-sleep" cx="60" cy="81" rx="3" ry="3.5" fill="#7f1d1d"/>
     </g>
-    ${hatSVG(hat, color)}
+    ${HATS[hat] ? `<g class="hat">${HATS[hat](dark)}</g>` : ''}
   </g>
   <g class="laptop">
     <path d="M36 104 L84 104 L90 114 L30 114 Z" fill="#94a3b8" stroke="#334155" stroke-width="2" stroke-linejoin="round"/>
