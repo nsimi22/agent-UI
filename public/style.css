@@ -1,49 +1,25 @@
 :root {
-  --bg: #fdf6ec;
-  --bg-2: #f3e8ff;
-  --panel: #ffffff;
-  --panel-2: #f8f5ff;
-  --ink: #1f1b2e;
-  --ink-soft: #5b5670;
-  --line: #e4dcf2;
-  --accent: #7c3aed;
-  --accent-ink: #ffffff;
-  --good: #16a34a;
-  --bad: #dc2626;
-  --warn: #d97706;
-  --work: #2563eb;
-  --floor-a: #efe4ff;
-  --floor-b: #e7dafc;
-  --bubble: #ffffff;
-  --shadow: 0 10px 30px -12px rgb(60 30 110 / 0.35);
+  --bg: #120f24;
+  --bg-2: #1d1640;
+  --panel: #1c1838;
+  --panel-2: #231e45;
+  --ink: #f4f1ff;
+  --ink-soft: #a9a3c7;
+  --line: #342d5f;
+  --accent: #a78bfa;
+  --accent-ink: #120f24;
+  --good: #4ade80;
+  --bad: #f87171;
+  --warn: #fbbf24;
+  --work: #60a5fa;
+  --floor-a: #1a1536;
+  --floor-b: #211a45;
+  --bubble: #2a2452;
+  --ticker: #0b0918;
+  --shadow: 0 14px 40px -14px rgb(0 0 0 / 0.7);
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --round: 'Fredoka', ui-rounded, 'Segoe UI', system-ui, sans-serif;
-  --star-opacity: 0;
-  color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #120f24;
-    --bg-2: #1d1640;
-    --panel: #1c1838;
-    --panel-2: #231e45;
-    --ink: #f4f1ff;
-    --ink-soft: #a9a3c7;
-    --line: #342d5f;
-    --accent: #a78bfa;
-    --accent-ink: #120f24;
-    --good: #4ade80;
-    --bad: #f87171;
-    --warn: #fbbf24;
-    --work: #60a5fa;
-    --floor-a: #1a1536;
-    --floor-b: #211a45;
-    --bubble: #2a2452;
-    --shadow: 0 14px 40px -14px rgb(0 0 0 / 0.7);
-    --star-opacity: 0.8;
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -58,7 +34,7 @@ button, textarea { font: inherit; color: inherit; }
 code, kbd { font-family: var(--mono); font-size: 0.85em; }
 kbd { padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); }
 
-.sky { position: fixed; inset: 0; pointer-events: none; z-index: -1; opacity: var(--star-opacity); }
+.sky { position: fixed; inset: 0; pointer-events: none; z-index: -1; opacity: 0.8; }
 .stars {
   position: absolute; inset: -50%;
   background-image:
@@ -320,7 +296,8 @@ dialog p { margin: 0 0 12px; color: var(--ink-soft); }
 /* ---------- ticker / toasts / confetti ---------- */
 .ticker {
   position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 12px;
-  padding: 10px clamp(16px, 4vw, 40px); background: var(--ink); color: var(--bg);
+  padding: 10px clamp(16px, 4vw, 40px); background: var(--ticker); color: var(--ink);
+  border-top: 2px solid var(--line);
   font-family: var(--mono); font-size: 12.5px; z-index: 10;
 }
 .ticker-label { background: #fbbf24; color: #1f1b2e; padding: 1px 8px; border-radius: 6px; font-weight: 600; }

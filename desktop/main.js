@@ -1,7 +1,7 @@
 // Agent Arcade desktop app: runs the arcade server in-process, shows it in a
 // native window, and adds a tray icon + system notifications.
 
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, shell, dialog } = require('electron');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 const path = require('path');
@@ -87,6 +87,7 @@ function adoptShellPath() {
 }
 
 async function boot() {
+  nativeTheme.themeSource = 'dark'; // dark title bar, menus and dialogs everywhere
   adoptShellPath();
   const base = { ...arcadePaths(), nodeBinary: process.execPath, defaultCwd: app.getPath('home') };
   try {
