@@ -16,7 +16,10 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "demo:crowd": "node server.js --config=examples/agents.crowd.json"
+    "demo:crowd": "node server.js --config=examples/agents.crowd.json",
+    "demo": "node server.js --config=examples/agents.demo.json",
+    "connect": "node connect.js",
+    "disconnect": "node connect.js --disconnect"
   },
   "engines": {
     "node": ">=18"
@@ -39,7 +42,9 @@
       "examples/**",
       "agents.json",
       "agents.example.json",
-      "package.json"
+      "package.json",
+      "watch.js",
+      "connect.js"
     ],
     "asar": false,
     "mac": {

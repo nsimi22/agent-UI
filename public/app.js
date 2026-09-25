@@ -7,6 +7,7 @@ const RELAX_AFTER_MS = 12_000;
 const IDLE_QUIPS = ['Ready for a quest!', 'Give me something to do 👀', 'Idle hands…', 'Poke me!', 'Standing by ✨', '*hums quietly*'];
 const DONE_QUIPS = ['Nailed it!', 'Ta-da! 🎉', 'Quest complete!', 'Easy peasy.'];
 const ERROR_QUIPS = ['Oops…', 'That did not go well 😵', 'Help?', 'I blame cosmic rays.'];
+const WAITING_QUIPS = ['Need your OK! ✋', 'Psst… over here!', 'Waiting on you 👀'];
 
 const state = {
   agents: new Map(), // id -> agent
@@ -42,14 +43,15 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&l
 // Server status is sticky ("done" stays "done"); the pod relaxes back to idle
 // after a short celebration and dozes off when nothing happens for a while.
 function displayStatus(a) {
-  if (a.status === 'working') return 'working';
+  if (a.status === 'working' || a.status === 'waiting') return a.status;
   if (a.status === 'error') return 'error'; // stays visible until the next run
   const age = Date.now() - a.lastActivity;
   if (age > SLEEP_AFTER_MS) return 'sleep';
   if (a.status !== 'idle' && age > RELAX_AFTER_MS) return 'idle';
   return a.status;
 }
-const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', done: 'done', error: 'oops' };
+const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', waiting: 'needs you', done: 'done', error: 'oops' };
+const isWatched = (a) => a.kind === 'watch';
 const STATUS_CLASSES = Object.keys(STATUS_LABEL).map((s) => `s-${s}`);
 
 // ---------------------------------------------------------------------------
@@ -106,6 +108,14 @@ function renderFloor() {
   empty.className = 'floor-empty';
   empty.hidden = true;
   floor.appendChild(empty);
+  if (!state.agents.size) {
+    floor.insertAdjacentHTML(
+      'beforeend',
+      `<div class="onboard"><big>🛋️</big><b>The arcade is empty.</b><br/>
+        Run <code>npm run connect</code> once (or use <b>Connect Claude Code &amp; Codex</b> in the tray menu),<br/>
+        then start <code>claude</code> or <code>codex</code> in a Cursor terminal. Each session shows up here.</div>`
+    );
+  }
   applyDensity();
   updateSummary();
 }
@@ -127,7 +137,7 @@ function applyFilter() {
   }
   const empty = $('#floor .floor-empty');
   if (empty) {
-    empty.hidden = shown > 0;
+    empty.hidden = shown > 0 || state.agents.size === 0;
     empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
   }
 }
@@ -223,13 +233,16 @@ function updateSummary() {
   const working = all.filter((a) => a.status === 'working').length;
   const wins = all.reduce((n, a) => n + a.stats.wins, 0);
   const failed = all.filter((a) => a.status === 'error').length;
+  const waiting = all.filter((a) => a.status === 'waiting').length;
   $('#summary').textContent =
     `${all.length} agent${all.length === 1 ? '' : 's'} · ` +
     (working ? `${working} hard at work` : 'everyone is chilling') +
-    (failed ? ` · ${failed} need${failed === 1 ? 's' : ''} attention` : '') +
+    (waiting ? ` · ${waiting} need${waiting === 1 ? 's' : ''} you` : '') +
+    (failed ? ` · ${failed} failed` : '') +
     ` · ${wins} quest${wins === 1 ? '' : 's'} completed`;
 
-  const counts = { all: all.length, working: 0, error: 0, done: 0, idle: 0 };
+  $('#partyBtn').hidden = !all.some((a) => !isWatched(a)); // only arcade-run agents take quests from here
+  const counts = { all: all.length, waiting: 0, working: 0, error: 0, done: 0, idle: 0 };
   for (const a of all) counts[a.status]++;
   document.querySelectorAll('.filter').forEach((b) => {
     b.querySelector('b').textContent = counts[b.dataset.filter];
@@ -251,7 +264,7 @@ async function openDrawer(id) {
   $('#drawerAvatar').innerHTML = critterSVG(a);
   $('#drawerName').textContent = a.name;
   $('#drawerRole').textContent = a.role || 'Agent';
-  $('#drawerCmd').textContent = `$ ${a.command}`;
+  $('#drawerCmd').textContent = isWatched(a) ? `watching ${a.command} in ${a.cwd}` : `$ ${a.command}`;
   $('#drawerCmd').title = a.command;
   $('#ideBtn').hidden = !a.ide;
   $('#ideBtn').textContent = `Open in ${a.ide} ↗`;
@@ -289,6 +302,8 @@ function updateDrawer() {
   const ds = displayStatus(a);
   $('#drawerAvatar').className = `drawer-avatar s-${ds}`;
   const working = a.status === 'working';
+  $('#composer').hidden = isWatched(a);
+  $('#watchNote').hidden = !isWatched(a);
   $('#stopBtn').hidden = !working;
   $('#sendBtn').disabled = working;
   $('#clearBtn').disabled = working;
@@ -399,6 +414,7 @@ $('#composer').addEventListener('submit', async (e) => {
 $('#prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#composer').requestSubmit();
 });
+$('#forgetBtn').addEventListener('click', () => agentApi(state.selected, 'forget').catch((e) => toast(e.message)));
 for (const action of ['stop', 'clear']) {
   $(`#${action}Btn`).addEventListener('click', () => agentApi(state.selected, action).catch((e) => toast(e.message)));
 }
@@ -418,6 +434,7 @@ $('#scrim').addEventListener('click', closeDrawer);
 // Party quest: pick several agents and send them the same prompt.
 function renderPicker() {
   $('#picker').innerHTML = [...state.agents.values()]
+    .filter((a) => !isWatched(a)) // terminal sessions take input in the terminal
     .map((a) => {
       const busy = a.status === 'working';
       return `<label class="${busy ? 'busy' : ''}" title="${escapeHtml(a.role || a.name)}${busy ? ' (busy)' : ''}">
@@ -519,14 +536,21 @@ function connect() {
     const a = JSON.parse(ev.data);
     const prev = state.agents.get(a.id);
     state.agents.set(a.id, a);
-    if (prev && prev.status !== a.status) {
+    if (!prev) {
+      renderFloor(); // a new terminal session appeared
+      return;
+    }
+    if (prev.status !== a.status) {
       if (a.status === 'working') {
         state.bubbles.set(a.id, 'On it! 🏃');
         sfx('start');
+      } else if (a.status === 'waiting') {
+        state.bubbles.set(a.id, a.lastLine || pick(WAITING_QUIPS));
+        sfx('waiting');
       } else if (a.status === 'done') {
-        state.bubbles.set(a.id, pick(DONE_QUIPS));
+        state.bubbles.set(a.id, (isWatched(a) && a.lastLine) || pick(DONE_QUIPS));
         sfx('done');
-        confettiFrom(podFor(a.id));
+        confettiFrom(podFor(a.id), isWatched(a) ? 35 : 70);
       } else if (a.status === 'error') {
         state.bubbles.set(a.id, pick(ERROR_QUIPS));
         sfx('error');
@@ -551,8 +575,17 @@ function connect() {
     }
     const a = state.agents.get(id);
     if (a) a.lastActivity = entry.t;
-    if (isOutput(entry) && lastLine) setBubble(id, lastLine);
+    if (lastLine && entry.kind !== 'prompt' && entry.kind !== 'sys') setBubble(id, lastLine);
     if (state.selected === id && list) appendEntry(entry);
+  });
+
+  es.addEventListener('removed', (ev) => {
+    const { id } = JSON.parse(ev.data);
+    state.agents.delete(id);
+    state.transcripts.delete(id);
+    state.bubbles.delete(id);
+    if (state.selected === id) closeDrawer();
+    renderFloor();
   });
 
   es.addEventListener('cleared', (ev) => {
@@ -616,6 +649,7 @@ function sfx(kind) {
     start: [[523, 0.06], [784, 0.08]],
     done: [[523, 0.08], [659, 0.08], [784, 0.08], [1047, 0.16]],
     error: [[330, 0.12], [247, 0.2]],
+    waiting: [[880, 0.08], [660, 0.08], [880, 0.12]],
     levelup: [[523, 0.1], [659, 0.1], [784, 0.1], [1047, 0.1], [784, 0.08], [1047, 0.3]],
   }[kind];
   let t = audio.currentTime;

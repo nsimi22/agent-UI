@@ -1,31 +1,46 @@
 # 🕹️ Agent Arcade
 
-A playful web UI for your **local agents**. Each agent is a little critter on the arcade floor:
+A playful dashboard for the coding agents you run in your terminals. Every **Claude Code** or **Codex** session you start (for example in Cursor's integrated terminal) shows up as a little critter on the arcade floor:
 
-- It **bobs** while idle and **naps** (💤) when left alone.
-- It **types furiously** on a tiny laptop while it works, and its latest output shows up in a speech bubble.
-- It **hops for joy** with confetti when a run succeeds, and gets dizzy when one fails.
-- It earns **XP and levels up** with every quest (the stats are saved in `data/stats.json`).
+- It **types furiously** while the agent works, and its speech bubble shows what it's doing (`🔧 Bash: npm test`).
+- It **waves at you** (✋) when the agent is waiting for your permission or input.
+- It **hops for joy** with confetti when a turn finishes, and shows the agent's reply.
+- It **naps** when nothing's happening, and earns **XP and levels** per project.
 
-Click an agent to open its chat drawer and send it a quest. The drawer streams output live, and you can stop a run from there. **📣 Party quest** sends the same prompt to every idle agent at once.
+Keep working in your terminals exactly as before. The arcade only watches: it tells you at a glance which of your 10+ sessions needs you. Click a critter to see its activity and jump to that project in Cursor.
 
-Any command-line tool can be an agent: `claude`, `ollama`, `aider`, a Python script, a shell script. You can use it in the browser, where the only runtime is Node with no dependencies to install, or as a **desktop app** with a tray icon and notifications.
-
-## Quick start (browser)
+## Quick start
 
 ```bash
-npm start            # or: node server.js
-# open http://127.0.0.1:4321
+npm install          # once (only needed for the desktop app)
+npm run connect      # once: lets Claude Code and Codex report to the arcade
+npm run desktop      # or `npm start` and open http://127.0.0.1:4321
 ```
 
-It comes with three demo agents (Pip, Bolt and Grub, who is chaos), so you can try it right away. To see a full crew of 12, run `npm run demo:crowd`.
+Then start `claude` or `codex` in any terminal. The session appears on the floor within a second. Sessions that were already running show up after their next event.
+
+`npm run connect` merges a few hooks into `~/.claude/settings.json` and `~/.codex/config.toml`. Your other settings are kept, a backup is saved next to each file (`*.arcade-backup`), and it's safe to run again. `npm run disconnect` removes exactly what it added. In the desktop app, the same switch is **Connect Claude Code & Codex…** in the tray menu.
+
+The hooks never slow your agent down or change what it does: they print nothing, give up after 2 seconds, and do nothing if the arcade isn't running.
+
+Want to see it without real agents? `npm run demo` starts three demo agents the arcade runs itself, and `npm run demo:crowd` starts twelve.
+
+## What you see
+
+| Critter | Status | Means |
+| --- | --- | --- |
+| typing on a laptop | **working** | the agent is thinking or running tools |
+| waving, gold outline | **needs you** | waiting for your permission or an answer in the terminal |
+| hopping, happy eyes | **done** | the turn finished; the bubble shows the last line of the reply |
+| sleeping | **napping** | nothing has happened for a minute |
+
+Each session is named after its folder (`api`, `web`, …). A critter's colour, hat and level stay with the project across sessions. Closed sessions leave the floor two minutes after they end; use **Dismiss** in the drawer to remove one sooner.
 
 ## Running a big crew (10+ agents)
 
+- **Filters.** `All · Needs you · Working · Failed · Done · Idle` show live counts.
 - **Compact layout.** It switches on automatically above 6 agents. Toggle it with **▦ Compact** or `C`.
-- **Filters.** `All · Working · Failed · Done · Idle` show live counts. Failed agents stay marked until their next run, so they don't get lost in a crowd.
-- **Search.** Press `/`, type part of a name or role, then press `Enter` to open the first match.
-- **Party quest picker.** Choose exactly which agents get a prompt. It starts with every idle agent selected.
+- **Search.** Press `/`, type part of a name or folder, then press `Enter` to open the first match.
 - Press `1`–`9` and `0` to jump to the first 10 agents.
 
 ## Desktop app
@@ -47,13 +62,13 @@ npm run dist:win       # .exe installer
 npm run dist:linux     # AppImage + .deb
 ```
 
-When you run from the checkout, the app uses the same `agents.local.json` / `agents.json` and `data/` as `npm start`. The installed app keeps its own `agents.json` in your user-data folder. On first launch it copies the demo agents there. Open it from the tray with **Edit agents…**, then use **Reload agents** to apply your changes. Agents whose `command` is `node` use the app's bundled Node, so the demo agents work even if Node isn't installed. The app also loads the PATH from your login shell. Without that, macOS apps opened from the Dock can't find tools like `claude`, `cursor` or `idea`.
+When you run from the checkout, the app uses the same `agents.local.json` / `agents.json` and `data/` as `npm start`. The installed app keeps its own `agents.json` in your user-data folder. On first launch it creates an empty one there. Open it from the tray with **Edit agents…**, then use **Reload agents** to apply your changes. Agents whose `command` is `node` use the app's bundled Node, so the demo agents work even if Node isn't installed. The app also loads the PATH from your login shell. Without that, macOS apps opened from the Dock can't find tools like `claude`, `cursor` or `idea`.
 
 > The builds aren't code-signed, so the first time you open the app, macOS Gatekeeper and Windows SmartScreen will warn you. On a Mac, right-click → **Open**.
 
-## Add your own agents
+## Agents the arcade runs itself (optional)
 
-Copy `agents.example.json` to `agents.local.json` and edit it. The local file is gitignored and takes precedence over `agents.json`.
+Besides watching your terminals, the arcade can also run one-shot agents itself: you type a task into its drawer (or send one to several agents with **📣 Party quest**) and it runs the command. Copy `agents.example.json` to `agents.local.json` and edit it. The local file is gitignored and takes precedence over `agents.json`.
 
 ```json
 {

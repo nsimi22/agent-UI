@@ -6,6 +6,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const path = require('path');
 const arcade = require('../server');
+const connect = require('../connect');
 
 const ROOT = path.join(__dirname, '..');
 const ASSETS = path.join(__dirname, 'assets');
@@ -173,30 +174,34 @@ function createTray() {
   refreshTray();
 }
 
-const STATUS_ICON = { idle: '💤', working: '⚙️', done: '✅', error: '💥' };
+const STATUS_ICON = { idle: '💤', working: '⚙️', waiting: '✋', done: '✅', error: '💥' };
 let trayKey = '';
 
 function refreshTray() {
   if (!tray || !instance) return;
   const agents = instance.snapshot();
   // Only rebuild the native menu when something it shows has changed.
-  const key = JSON.stringify(agents.map((a) => [a.status, a.stats.level, a.task]));
+  const key = JSON.stringify(agents.map((a) => [a.id, a.status, a.stats.level, a.task, a.status === 'waiting' && a.lastLine]));
   if (key === trayKey) return;
   trayKey = key;
   const working = agents.filter((a) => a.status === 'working');
+  const waiting = agents.filter((a) => a.status === 'waiting');
+  const summary = [waiting.length && `${waiting.length} need you`, working.length && `${working.length} working`].filter(Boolean).join(' · ');
 
   tray.setImage(trayImage(working.length > 0));
-  tray.setToolTip(working.length ? `Agent Arcade: ${working.length} working` : 'Agent Arcade: all idle');
-  if (IS_MAC) tray.setTitle(working.length ? ` ${working.length}` : '');
-  app.setBadgeCount(working.length);
+  tray.setToolTip(`Agent Arcade: ${summary || 'all idle'}`);
+  // The badge counts sessions waiting on you; failing that, the busy ones.
+  const badge = waiting.length || working.length;
+  if (IS_MAC) tray.setTitle(badge ? ` ${waiting.length ? '✋' : ''}${badge}` : '');
+  app.setBadgeCount(badge);
 
   const menu = Menu.buildFromTemplate([
     { label: 'Show Agent Arcade', click: showWindow },
     { type: 'separator' },
-    { label: working.length ? `${working.length} of ${agents.length} working` : `${agents.length} agents, all idle`, enabled: false },
+    { label: agents.length ? `${agents.length} agents · ${summary || 'all idle'}` : 'No agents yet', enabled: false },
     ...agents.map((a) => ({
       label: `${STATUS_ICON[a.status] || '•'}  ${a.name}  ·  Lv ${a.stats.level}`,
-      sublabel: a.status === 'working' && a.task ? a.task.slice(0, 60) : a.role || undefined,
+      sublabel: (a.status === 'working' || a.status === 'waiting') && (a.lastLine || a.task) ? (a.lastLine || a.task).slice(0, 60) : a.role || undefined,
       click: () => openAgent(a.id),
     })),
     { type: 'separator' },
@@ -219,6 +224,12 @@ function refreshTray() {
           },
         ]
       : []),
+    {
+      label: 'Connect Claude Code & Codex…',
+      type: 'checkbox',
+      checked: connect.isConnected(),
+      click: toggleConnected,
+    },
     { label: 'Edit agents…', click: () => shell.openPath(instance.configPath) },
     {
       label: 'Reload agents (restarts app)',
@@ -245,8 +256,34 @@ function refreshTraySoon() {
 // The server only reports "done"/"error" at the end of a run.
 function onAgent(a) {
   refreshTraySoon();
-  if (a.status === 'done') notify(`${a.name} finished 🎉`, a.lastLine || a.task || 'Quest complete!', a.id);
+  if (a.status === 'waiting') notify(`${a.name} needs you ✋`, a.lastLine || 'Waiting for your OK in the terminal.', a.id);
+  else if (a.status === 'done') notify(`${a.name} finished 🎉`, a.lastLine || a.task || 'Quest complete!', a.id);
   else if (a.status === 'error') notify(`${a.name} hit a snag 😵`, a.lastLine || 'The run failed. Open it to see what happened.', a.id);
+}
+
+// Tray toggle: add or remove the hooks that let terminal sessions report here.
+async function toggleConnected(item) {
+  const wasConnected = !item.checked; // Electron flips the checkbox before calling us
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: [wasConnected ? 'Disconnect' : 'Connect', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    message: wasConnected ? 'Stop watching Claude Code and Codex sessions?' : 'Watch your Claude Code and Codex sessions?',
+    detail: wasConnected
+      ? 'Removes the Agent Arcade hooks from ~/.claude/settings.json and ~/.codex/config.toml.'
+      : 'Adds small hooks to ~/.claude/settings.json and ~/.codex/config.toml that tell the arcade what each terminal session is doing. Your other settings are kept, and a backup is saved next to each file.',
+  });
+  if (response === 0) {
+    try {
+      const changed = wasConnected ? connect.disconnectAll() : connect.connectAll(Number(new URL(instance.url).port));
+      notify(wasConnected ? 'Disconnected' : 'Connected 🎉', changed.messages.join('\n'));
+    } catch (err) {
+      dialog.showErrorBox('Agent Arcade', err.message);
+    }
+  }
+  trayKey = ''; // force the menu to show the real state
+  refreshTray();
 }
 
 function onLevelUp({ id, name, level }) {

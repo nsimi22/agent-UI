@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { stripVTControlCharacters } = require('util');
+const { createWatch } = require('./watch');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -29,6 +30,7 @@ let CONFIG_PATH;
 let DATA_DIR;
 let STATS_FILE;
 let options = {};
+let configIde = null; // top-level "ide" from the config; also used for watched sessions
 let listenHost = '127.0.0.1';
 
 function resolveConfigPath() {
@@ -43,9 +45,8 @@ function loadConfig() {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   const list = Array.isArray(raw) ? raw : raw.agents;
   const defaultIde = Array.isArray(raw) ? null : raw.ide || null;
-  if (!Array.isArray(list) || list.length === 0) {
-    throw new Error(`${CONFIG_PATH} must contain a non-empty "agents" array`);
-  }
+  if (!Array.isArray(list)) throw new Error(`${CONFIG_PATH} must contain an "agents" array`);
+  configIde = resolveIde(defaultIde);
   const seen = new Set();
   return list.map((a, i) => {
     if (!a.id || !a.command) throw new Error(`agent #${i} needs "id" and "command"`);
@@ -184,37 +185,37 @@ function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
+// XP/level stats, keyed by agent id (or by project for watched sessions, so a
+// project keeps its level across terminal sessions).
+let statsStore = {};
 let statsSaveTimer = null;
 function saveStatsSoon() {
   clearTimeout(statsSaveTimer);
-  statsSaveTimer = setTimeout(() => {
-    const out = {};
-    for (const a of agents.values()) out[a.cfg.id] = a.stats;
-    writeJson(STATS_FILE, out);
-  }, 300);
+  statsSaveTimer = setTimeout(() => writeJson(STATS_FILE, statsStore), 300);
 }
 
 let agents = new Map();
+let watch = null; // see watch.js
+function makeAgent(cfg) {
+  const key = cfg.statsKey || cfg.id;
+  statsStore[key] = { xp: 0, runs: 0, wins: 0, fails: 0, ...statsStore[key] };
+  return {
+    cfg,
+    status: 'idle', // idle | working | waiting | done | error
+    task: null,
+    startedAt: null,
+    lastActivity: Date.now(),
+    proc: null,
+    transcript: [],
+    lastLine: null, // latest non-blank output line of the current run
+    seq: 0, // transcript entry counter, so clients can merge live + fetched entries
+    stats: statsStore[key],
+  };
+}
 
 function loadAgents() {
-  const stats = readJson(STATS_FILE, {});
-  agents = new Map(
-    loadConfig().map((cfg) => [
-      cfg.id,
-      {
-        cfg,
-        status: 'idle', // idle | working | done | error
-        task: null,
-        startedAt: null,
-        lastActivity: Date.now(),
-        proc: null,
-        transcript: [],
-        lastLine: null, // latest non-blank output line of the current run
-        seq: 0, // transcript entry counter, so clients can merge live + fetched entries
-        stats: { xp: 0, runs: 0, wins: 0, fails: 0, ...(stats[cfg.id] || {}) },
-      },
-    ])
-  );
+  statsStore = readJson(STATS_FILE, {});
+  agents = new Map(loadConfig().map((cfg) => [cfg.id, makeAgent(cfg)]));
 }
 
 function publicAgent(a) {
@@ -225,6 +226,9 @@ function publicAgent(a) {
     role: a.cfg.role,
     color: a.cfg.color,
     hat: a.cfg.hat,
+    kind: a.cfg.kind || 'launch', // launch: the arcade runs it; watch: a terminal session we observe
+    source: a.cfg.source || null,
+    hashKey: a.cfg.hashKey || a.cfg.id, // picks the critter's colour and hat
     command: [a.cfg.command, ...a.cfg.args].join(' '),
     cwd: a.cfg.cwd,
     ide: a.cfg.ide ? a.cfg.ide.label : null,
@@ -268,13 +272,15 @@ function lastLineOf(text) {
   return null;
 }
 
-function pushTranscript(a, entry) {
+// `line` overrides the pod's speech-bubble text (defaults to the output's last line).
+function pushTranscript(a, entry, line) {
   const full = { seq: ++a.seq, t: Date.now(), ...entry };
   a.transcript.push(full);
   // Trim in batches rather than shifting the array on every chunk.
   if (a.transcript.length > MAX_TRANSCRIPT * 1.25) a.transcript.splice(0, a.transcript.length - MAX_TRANSCRIPT);
   a.lastActivity = full.t;
-  if (entry.kind === 'out' || entry.kind === 'err') a.lastLine = lastLineOf(entry.text) || a.lastLine;
+  if (line) a.lastLine = line.slice(0, 180);
+  else if (entry.kind === 'out' || entry.kind === 'err') a.lastLine = lastLineOf(entry.text) || a.lastLine;
   broadcast('transcript', { id: a.cfg.id, entry: full, lastLine: a.lastLine });
 }
 
@@ -371,16 +377,7 @@ function runAgent(a, prompt) {
     a.proc = null;
     const secs = ((Date.now() - a.startedAt) / 1000).toFixed(1);
     const ok = code === 0 && !spawnError;
-    const levelBefore = levelOf(a.stats.xp);
-    if (ok) {
-      a.stats.wins += 1;
-      a.stats.xp += 25 + Math.min(25, Math.round(Number(secs)));
-    } else {
-      a.stats.fails += 1;
-      a.stats.xp += 5; // participation trophy
-    }
-    const level = levelOf(a.stats.xp);
-    saveStatsSoon();
+    award(a, { ok, xp: ok ? 25 + Math.min(25, Math.round(Number(secs))) : 5 }); // 5 = participation trophy
 
     const why = spawnError ? spawnError.message : signal ? `stopped (${signal})` : `exit ${code}`;
     pushTranscript(a, { kind: 'sys', text: ok ? `✅ done in ${secs}s` : `💥 ${why} after ${secs}s` });
@@ -389,15 +386,25 @@ function runAgent(a, prompt) {
       id: cfg.id,
       text: ok ? `${cfg.name} completed a quest in ${secs}s` : `${cfg.name} stumbled: ${why}`,
     });
-    if (level > levelBefore) {
-      broadcast('levelup', { id: cfg.id, name: cfg.name, level });
-      broadcast('log', { id: cfg.id, text: `🎉 ${cfg.name} reached level ${level}!` });
-    }
   };
 
   child.on('error', (err) => finish(null, null, err));
   child.on('close', (code, signal) => finish(code, signal));
   return { ok: true };
+}
+
+// Record a finished run/turn and announce a level-up if it earned one.
+function award(a, { ok, xp }) {
+  const before = levelOf(a.stats.xp);
+  if (ok) a.stats.wins += 1;
+  else a.stats.fails += 1;
+  a.stats.xp += xp;
+  saveStatsSoon();
+  const level = levelOf(a.stats.xp);
+  if (level > before) {
+    broadcast('levelup', { id: a.cfg.id, name: a.cfg.name, level });
+    broadcast('log', { id: a.cfg.id, text: `🎉 ${a.cfg.name} reached level ${level}!` });
+  }
 }
 
 function stopAgent(a) {
@@ -508,7 +515,23 @@ async function handle(req, res) {
     return sendJson(res, 200, snapshot());
   }
 
-  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide)$/);
+  // Events from Claude Code hooks / Codex notify in your terminals. Always
+  // answers 204 with an empty body: hook output must never reach the agent.
+  const hook = pathname.match(/^\/api\/hooks\/(claude|codex)$/);
+  if (hook && req.method === 'POST') {
+    if (!sameOrigin(req)) return sendJson(res, 403, { error: 'cross-origin request refused' });
+    let event;
+    try {
+      event = await readBody(req);
+    } catch {
+      event = null;
+    }
+    res.writeHead(204).end();
+    if (event) watch.handle(hook[1], event);
+    return;
+  }
+
+  const m = pathname.match(/^\/api\/agents\/([^/]+)\/(run|stop|transcript|clear|open-ide|forget)$/);
   if (m) {
     const a = agents.get(decodeURIComponent(m[1]));
     if (!a) return sendJson(res, 404, { error: 'unknown agent' });
@@ -517,6 +540,15 @@ async function handle(req, res) {
     if (action === 'transcript' && req.method === 'GET') return sendJson(res, 200, a.transcript);
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
     if (!sameOrigin(req)) return sendJson(res, 403, { error: 'cross-origin request refused' });
+    const watched = a.cfg.kind === 'watch';
+    if (watched && (action === 'run' || action === 'stop')) {
+      return sendJson(res, 409, { error: `${a.cfg.name} runs in your terminal — reply to it there` });
+    }
+    if (action === 'forget') {
+      if (!watched) return sendJson(res, 409, { error: 'only watched sessions can be dismissed' });
+      watch.remove(a.cfg.id);
+      return sendJson(res, 200, { ok: true });
+    }
 
     if (action === 'run') {
       let body;
@@ -588,6 +620,15 @@ async function start(opts = {}) {
   DATA_DIR = opts.dataDir || path.join(ROOT, 'data');
   STATS_FILE = path.join(DATA_DIR, 'stats.json');
   loadAgents();
+  watch = createWatch({
+    agents,
+    makeAgent,
+    pushTranscript,
+    setStatus,
+    award,
+    broadcast,
+    defaultIde: () => configIde || resolveIde('cursor'),
+  });
 
   const host = opts.host || process.env.HOST || '127.0.0.1';
   listenHost = host;
