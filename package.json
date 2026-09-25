@@ -44,7 +44,8 @@
       "agents.example.json",
       "package.json",
       "watch.js",
-      "connect.js"
+      "connect.js",
+      "util.js"
     ],
     "asar": false,
     "mac": {

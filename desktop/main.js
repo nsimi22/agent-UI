@@ -7,6 +7,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const arcade = require('../server');
 const connect = require('../connect');
+const { readJson, writeJson } = require('../util');
 
 const ROOT = path.join(__dirname, '..');
 const ASSETS = path.join(__dirname, 'assets');
@@ -17,7 +18,8 @@ let win = null;
 let tray = null;
 let instance = null; // what arcade.start() resolved with
 let quitting = false;
-const settings = { notifications: true, ...arcade.readJson(settingsFile(), {}) };
+const settings = { notifications: true, ...readJson(settingsFile(), {}) };
+let connected = false; // are the Claude Code / Codex hooks installed? read at boot, updated by the toggle
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -34,7 +36,7 @@ function settingsFile() {
 }
 
 function saveSettings() {
-  arcade.writeJson(settingsFile(), settings);
+  writeJson(settingsFile(), settings);
 }
 
 // Running from a checkout uses the repo's agents.local.json / agents.json and
@@ -88,6 +90,7 @@ async function boot() {
     return;
   }
 
+  connected = connect.isConnected();
   instance.bus.on('agent', onAgent);
   instance.bus.on('levelup', onLevelUp);
   instance.bus.on('removed', refreshTraySoon); // dismissed / expired sessions leave the tray too
@@ -182,7 +185,7 @@ function refreshTray() {
   if (!tray || !instance) return;
   const agents = instance.snapshot();
   // Only rebuild the native menu when something it shows has changed.
-  const key = JSON.stringify(agents.map((a) => [a.id, a.status, a.stats.level, a.task, a.status === 'waiting' && a.lastLine]));
+  const key = JSON.stringify([connected, agents.map((a) => [a.id, a.name, a.status, a.stats.level, busyLine(a)])]);
   if (key === trayKey) return;
   trayKey = key;
   const working = agents.filter((a) => a.status === 'working');
@@ -202,7 +205,7 @@ function refreshTray() {
     { label: agents.length ? `${agents.length} agents · ${summary || 'all idle'}` : 'No agents yet', enabled: false },
     ...agents.map((a) => ({
       label: `${STATUS_ICON[a.status] || '•'}  ${a.name}  ·  Lv ${a.stats.level}`,
-      sublabel: (a.status === 'working' || a.status === 'waiting') && (a.lastLine || a.task) ? (a.lastLine || a.task).slice(0, 60) : a.role || undefined,
+      sublabel: busyLine(a) || a.role || undefined,
       click: () => openAgent(a.id),
     })),
     { type: 'separator' },
@@ -228,7 +231,7 @@ function refreshTray() {
     {
       label: 'Connect Claude Code & Codex…',
       type: 'checkbox',
-      checked: connect.isConnected(),
+      checked: connected,
       click: toggleConnected,
     },
     { label: 'Edit agents…', click: () => shell.openPath(instance.configPath) },
@@ -243,6 +246,13 @@ function refreshTray() {
     { label: 'Quit Agent Arcade', accelerator: IS_MAC ? 'Cmd+Q' : undefined, click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
+}
+
+// What a busy agent is up to, for its tray entry.
+function busyLine(a) {
+  const busy = a.status === 'working' || a.status === 'waiting';
+  const line = busy && (a.lastLine || a.task);
+  return line ? line.slice(0, 60) : null;
 }
 
 let trayTimer = null;
@@ -279,11 +289,12 @@ async function toggleConnected(item) {
     try {
       const changed = wasConnected ? connect.disconnectAll() : connect.connectAll(Number(new URL(instance.url).port));
       notify(wasConnected ? 'Disconnected' : 'Connected 🎉', changed.messages.join('\n'));
+      connected = !wasConnected;
     } catch (err) {
       dialog.showErrorBox('Agent Arcade', err.message);
     }
   }
-  trayKey = ''; // force the menu to show the real state
+  trayKey = ''; // Electron already flipped the checkbox; rebuild so it shows the real state
   refreshTray();
 }
 

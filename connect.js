@@ -11,6 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { readJson } = require('./util');
 
 const DEFAULT_PORT = 4321;
 const hookUrl = (port, source) => `http://127.0.0.1:${port}/api/hooks/${source}`;
@@ -30,10 +31,14 @@ function backupOnce(file) {
 const CLAUDE_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const CLAUDE_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
 
-// Posts the hook's JSON (stdin) to the arcade. It prints nothing (hook output
-// can end up in the agent's context), gives up after 2s, and never fails.
+// Posts an event's JSON to the arcade. It prints nothing (hook output can end
+// up in the agent's context) and gives up after 2s. The body comes last:
+// "@-" (stdin) for hooks, or the argument Codex appends for notify.
+const curlArgv = (port, source) => ['curl', '-s', '-o', '/dev/null', '-m', '2', '-X', 'POST', '-H', 'Content-Type: application/json', hookUrl(port, source), '--data-binary'];
+
+// Hooks run through a shell; `|| true` means a closed arcade never fails one.
 function hookCommand(port, source) {
-  return `curl -s -o /dev/null -m 2 -X POST -H "Content-Type: application/json" --data-binary @- ${hookUrl(port, source)} || true`;
+  return `${curlArgv(port, source).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')} @- || true`;
 }
 
 function readJsonFile(file) {
@@ -63,7 +68,6 @@ function addHooks(file, events, handler) {
 }
 
 function removeHooks(file) {
-  if (!fs.existsSync(file)) return null;
   const data = readJsonFile(file);
   if (!hasArcadeHooks(data)) return null;
   const hooks = withoutArcadeHooks(data.hooks);
@@ -71,7 +75,7 @@ function removeHooks(file) {
   if (!Object.keys(hooks).length) delete next.hooks;
   // A file we created (no backup of an original) and left empty goes away.
   if (!Object.keys(next).length && !fs.existsSync(`${file}.arcade-backup`)) fs.unlinkSync(file);
-  else fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  else writeJsonFile(file, next);
   return file;
 }
 
@@ -112,8 +116,7 @@ const NOTIFY_COMMENT = '# Agent Arcade: report finished turns (npm run disconnec
 // Codex appends the event JSON as the last argument, which lands right after
 // --data-binary. It runs without a shell, so no quoting games.
 function notifyLine(port) {
-  const argv = ['curl', '-s', '-o', '/dev/null', '-m', '2', '-X', 'POST', '-H', 'Content-Type: application/json', hookUrl(port, 'codex'), '--data-binary'];
-  return `notify = [${argv.map((a) => JSON.stringify(a)).join(', ')}]`;
+  return `notify = [${curlArgv(port, 'codex').map((a) => JSON.stringify(a)).join(', ')}]`;
 }
 
 // Top-level keys must come before the first [table] header. Returns where
@@ -165,14 +168,6 @@ function disconnectCodex() {
   return [removeHooks(CODEX_HOOKS), disconnectCodexNotify()].filter(Boolean);
 }
 
-function codexConnected() {
-  try {
-    return hasArcadeHooks(readJsonFile(CODEX_HOOKS)) || (fs.existsSync(CODEX_CONFIG) && isOurs(fs.readFileSync(CODEX_CONFIG, 'utf8')));
-  } catch {
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Everything
 
@@ -197,15 +192,10 @@ function disconnectAll() {
   };
 }
 
-const isConnected = () => hasArcadeHooks(safeRead(CLAUDE_SETTINGS)) || codexConnected();
-
-function safeRead(file) {
-  try {
-    return readJsonFile(file);
-  } catch {
-    return {};
-  }
-}
+const isConnected = () =>
+  hasArcadeHooks(readJson(CLAUDE_SETTINGS, {})) ||
+  hasArcadeHooks(readJson(CODEX_HOOKS, {})) ||
+  isOurs(fs.existsSync(CODEX_CONFIG) ? fs.readFileSync(CODEX_CONFIG, 'utf8') : '');
 
 module.exports = { connectAll, disconnectAll, isConnected, DEFAULT_PORT };
 

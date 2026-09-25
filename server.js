@@ -11,6 +11,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { stripVTControlCharacters } = require('util');
 const { createWatch } = require('./watch');
+const { truncate, tildify, readJson, writeJson } = require('./util');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -30,7 +31,6 @@ let CONFIG_PATH;
 let DATA_DIR;
 let STATS_FILE;
 let options = {};
-let configIde = null; // top-level "ide" from the config; also used for watched sessions
 let listenHost = '127.0.0.1';
 
 function resolveConfigPath() {
@@ -46,9 +46,8 @@ function loadConfig() {
   const list = Array.isArray(raw) ? raw : raw.agents;
   const defaultIde = Array.isArray(raw) ? null : raw.ide || null;
   if (!Array.isArray(list)) throw new Error(`${CONFIG_PATH} must contain an "agents" array`);
-  configIde = resolveIde(defaultIde);
   const seen = new Set();
-  return list.map((a, i) => {
+  const agents = list.map((a, i) => {
     if (!a.id || !a.command) throw new Error(`agent #${i} needs "id" and "command"`);
     if (seen.has(a.id)) throw new Error(`duplicate agent id "${a.id}"`);
     seen.add(a.id);
@@ -67,6 +66,7 @@ function loadConfig() {
       ide: resolveIde(a.ide === undefined ? defaultIde : a.ide),
     };
   });
+  return { agents, ide: resolveIde(defaultIde) };
 }
 
 // ---------------------------------------------------------------------------
@@ -172,19 +172,6 @@ async function openInIde(a) {
 // ---------------------------------------------------------------------------
 // State
 
-function readJson(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
 // XP/level stats, keyed by agent id (or by project for watched sessions, so a
 // project keeps its level across terminal sessions).
 let statsStore = {};
@@ -196,8 +183,11 @@ function saveStatsSoon() {
 
 let agents = new Map();
 let watch = null; // see watch.js
+// Watched sessions (cfg.source set) keep XP, colour and hat per project.
+const projectKey = (cfg) => (cfg.source ? `${cfg.source}:${cfg.cwd}` : cfg.id);
+
 function makeAgent(cfg) {
-  const key = cfg.statsKey || cfg.id;
+  const key = cfg.source ? `watch:${projectKey(cfg)}` : cfg.id;
   statsStore[key] = { xp: 0, runs: 0, wins: 0, fails: 0, ...statsStore[key] };
   return {
     cfg,
@@ -213,9 +203,12 @@ function makeAgent(cfg) {
   };
 }
 
+// Returns the config's default IDE (also used for watched sessions).
 function loadAgents() {
   statsStore = readJson(STATS_FILE, {});
-  agents = new Map(loadConfig().map((cfg) => [cfg.id, makeAgent(cfg)]));
+  const config = loadConfig();
+  agents = new Map(config.agents.map((cfg) => [cfg.id, makeAgent(cfg)]));
+  return config.ide;
 }
 
 function publicAgent(a) {
@@ -226,15 +219,14 @@ function publicAgent(a) {
     role: a.cfg.role,
     color: a.cfg.color,
     hat: a.cfg.hat,
-    kind: a.cfg.kind || 'launch', // launch: the arcade runs it; watch: a terminal session we observe
-    source: a.cfg.source || null,
-    hashKey: a.cfg.hashKey || a.cfg.id, // picks the critter's colour and hat
+    kind: a.cfg.source ? 'watch' : 'launch', // launch: the arcade runs it; watch: a terminal session we observe
+    hashKey: projectKey(a.cfg), // picks the critter's colour and hat
     command: [a.cfg.command, ...a.cfg.args].join(' '),
     cwd: a.cfg.cwd,
-    where: a.cfg.where || a.cfg.cwd, // cwd with ~ for display
+    where: tildify(a.cfg.cwd),
     ide: a.cfg.ide ? a.cfg.ide.label : null,
     status: a.status,
-    task: a.task,
+    task: a.task && truncate(a.task, 200), // the full prompt is in the transcript
     lastLine: a.lastLine,
     startedAt: a.startedAt,
     lastActivity: a.lastActivity,
@@ -541,7 +533,7 @@ async function handle(req, res) {
     if (action === 'transcript' && req.method === 'GET') return sendJson(res, 200, a.transcript);
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
     if (!sameOrigin(req)) return sendJson(res, 403, { error: 'cross-origin request refused' });
-    const watched = a.cfg.kind === 'watch';
+    const watched = Boolean(a.cfg.source);
     if (watched && (action === 'run' || action === 'stop')) {
       return sendJson(res, 409, { error: `${a.cfg.name} runs in your terminal — reply to it there` });
     }
@@ -594,10 +586,6 @@ async function handle(req, res) {
 // ---------------------------------------------------------------------------
 // Helpers
 
-function truncate(s, n) {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
-
 function stopAll() {
   for (const a of agents.values()) a.proc && a.proc.kill('SIGTERM');
 }
@@ -620,7 +608,7 @@ async function start(opts = {}) {
   CONFIG_PATH = opts.configPath || resolveConfigPath();
   DATA_DIR = opts.dataDir || path.join(ROOT, 'data');
   STATS_FILE = path.join(DATA_DIR, 'stats.json');
-  loadAgents();
+  const ide = loadAgents();
   watch = createWatch({
     agents,
     makeAgent,
@@ -628,7 +616,7 @@ async function start(opts = {}) {
     setStatus,
     award,
     broadcast,
-    defaultIde: () => configIde || resolveIde('cursor'),
+    defaultIde: ide || resolveIde('cursor'),
   });
 
   const host = opts.host || process.env.HOST || '127.0.0.1';
@@ -644,7 +632,7 @@ async function start(opts = {}) {
   return { url: `http://${host}:${actual}`, configPath: CONFIG_PATH, bus, snapshot, stopAll };
 }
 
-module.exports = { start, readJson, writeJson };
+module.exports = { start };
 
 if (require.main === module) {
   const shutdown = () => {

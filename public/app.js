@@ -52,6 +52,10 @@ function displayStatus(a) {
 }
 const STATUS_LABEL = { idle: 'idle', sleep: 'napping', working: 'working', waiting: 'needs you', done: 'done', error: 'oops' };
 const isWatched = (a) => a.kind === 'watch';
+const QUIPS = { idle: IDLE_QUIPS, waiting: WAITING_QUIPS, done: DONE_QUIPS, error: ERROR_QUIPS };
+const ONBOARDING = `<big>🛋️</big><b>The arcade is empty.</b><br/>
+  Run <code>npm run connect</code> once (or use <b>Connect Claude Code &amp; Codex</b> in the tray menu),<br/>
+  then start <code>claude</code> or <code>codex</code> in a Cursor terminal. Each session shows up here.`;
 const STATUS_CLASSES = Object.keys(STATUS_LABEL).map((s) => `s-${s}`);
 
 // ---------------------------------------------------------------------------
@@ -63,61 +67,69 @@ function podFor(id) {
 
 function renderFloor() {
   const floor = $('#floor');
-  floor.innerHTML = '';
+  floor.innerHTML = '<p class="floor-empty" hidden></p>';
   state.pods.clear();
-  [...state.agents.values()].forEach((a, i) => {
-    const pod = document.createElement('article');
-    pod.className = 'pod';
-    pod.dataset.id = a.id;
-    pod.tabIndex = 0;
-    pod.setAttribute('role', 'button');
-    pod.setAttribute('aria-label', `${a.name}, ${a.role || 'agent'}`);
-    pod.innerHTML = `
-      ${i < 10 ? `<kbd class="keycap">${(i + 1) % 10}</kbd>` : ''}
-      <span class="status"></span>
-      <div class="bubble" hidden></div>
-      <div class="stage">${critterSVG(a)}<div class="zzz"><span>z</span><span>z</span><span>Z</span></div></div>
-      <h3>${escapeHtml(a.name)}</h3>
-      <p class="role">${escapeHtml(a.role || '')}</p>
-      <div class="meta">
-        <span class="lvl"></span>
-        <div class="xpbar" title="XP"><i></i></div>
-        <span class="timer"></span>
-      </div>`;
-    pod.addEventListener('click', () => openDrawer(a.id));
-    pod.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openDrawer(a.id);
-      }
-    });
-    floor.appendChild(pod);
-    const q = (sel) => pod.querySelector(sel);
-    state.pods.set(a.id, {
-      el: pod,
-      status: q('.status'),
-      bubble: q('.bubble'),
-      lvl: q('.lvl'),
-      xpbar: q('.xpbar'),
-      xpfill: q('.xpbar i'),
-      timer: q('.timer'),
-    });
-    updatePod(a.id);
-  });
-  const empty = document.createElement('p');
-  empty.className = 'floor-empty';
-  empty.hidden = true;
-  floor.appendChild(empty);
-  if (!state.agents.size) {
-    floor.insertAdjacentHTML(
-      'beforeend',
-      `<div class="onboard"><big>🛋️</big><b>The arcade is empty.</b><br/>
-        Run <code>npm run connect</code> once (or use <b>Connect Claude Code &amp; Codex</b> in the tray menu),<br/>
-        then start <code>claude</code> or <code>codex</code> in a Cursor terminal. Each session shows up here.</div>`
-    );
-  }
+  for (const a of state.agents.values()) addPod(a);
   applyDensity();
   updateSummary();
+}
+
+// Pods are added and removed one at a time as terminal sessions come and go,
+// so the rest of the floor (and its animations) is left alone.
+function addPod(a) {
+  const pod = document.createElement('article');
+  pod.className = 'pod';
+  pod.dataset.id = a.id;
+  pod.tabIndex = 0;
+  pod.setAttribute('role', 'button');
+  pod.setAttribute('aria-label', `${a.name}, ${a.role || 'agent'}`);
+  pod.innerHTML = `
+    <kbd class="keycap" hidden></kbd>
+    <span class="status"></span>
+    <div class="bubble" hidden></div>
+    <div class="stage">${critterSVG(a)}<div class="zzz"><span>z</span><span>z</span><span>Z</span></div></div>
+    <h3>${escapeHtml(a.name)}</h3>
+    <p class="role">${escapeHtml(a.role || '')}</p>
+    <div class="meta">
+      <span class="lvl"></span>
+      <div class="xpbar" title="XP"><i></i></div>
+      <span class="timer"></span>
+    </div>`;
+  pod.addEventListener('click', () => openDrawer(a.id));
+  pod.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openDrawer(a.id);
+    }
+  });
+  $('#floor').insertBefore(pod, $('#floor .floor-empty'));
+  const q = (sel) => pod.querySelector(sel);
+  state.pods.set(a.id, {
+    el: pod,
+    keycap: q('.keycap'),
+    status: q('.status'),
+    bubble: q('.bubble'),
+    lvl: q('.lvl'),
+    xpbar: q('.xpbar'),
+    xpfill: q('.xpbar i'),
+    timer: q('.timer'),
+  });
+  updatePod(a.id);
+  renumberKeys();
+}
+
+function removePod(id) {
+  state.pods.get(id)?.el.remove();
+  state.pods.delete(id);
+  renumberKeys();
+}
+
+// Keys 1–9 and 0 open the first ten agents, in floor order.
+function renumberKeys() {
+  [...state.pods.values()].forEach((p, i) => {
+    p.keycap.hidden = i >= 10;
+    p.keycap.textContent = (i + 1) % 10;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -136,10 +148,10 @@ function applyFilter() {
     if (matches) shown++;
   }
   const empty = $('#floor .floor-empty');
-  if (empty) {
-    empty.hidden = shown > 0 || state.agents.size === 0;
-    empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
-  }
+  if (!empty) return;
+  empty.hidden = shown > 0;
+  if (!state.agents.size) empty.innerHTML = ONBOARDING;
+  else empty.textContent = q ? `No agents match “${state.search.trim()}”.` : 'Nobody here right now.';
 }
 
 function setFilter(filter) {
@@ -197,7 +209,7 @@ function updatePod(id) {
   p.xpbar.title = `${a.stats.xp} XP · ${a.stats.wins} wins · ${a.stats.fails} fails`;
   updateTimer(a);
 
-  const quips = ds === 'done' ? DONE_QUIPS : ds === 'error' ? ERROR_QUIPS : IDLE_QUIPS;
+  const quips = QUIPS[ds] || IDLE_QUIPS;
   if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, pick(quips));
   setBubble(id, state.bubbles.get(id) || '');
 }
@@ -537,7 +549,10 @@ function connect() {
     const prev = state.agents.get(a.id);
     state.agents.set(a.id, a);
     if (!prev) {
-      renderFloor(); // a new terminal session appeared
+      // A new terminal session appeared.
+      if (state.agents.size === 1) renderFloor(); // replaces the onboarding card
+      else addPod(a);
+      updateSummary();
       return;
     }
     if (prev.status !== a.status) {
@@ -585,7 +600,8 @@ function connect() {
     state.transcripts.delete(id);
     state.bubbles.delete(id);
     if (state.selected === id) closeDrawer();
-    renderFloor();
+    removePod(id);
+    updateSummary();
   });
 
   es.addEventListener('cleared', (ev) => {
