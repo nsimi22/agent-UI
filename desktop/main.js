@@ -90,6 +90,7 @@ async function boot() {
 
   instance.bus.on('agent', onAgent);
   instance.bus.on('levelup', onLevelUp);
+  instance.bus.on('removed', refreshTraySoon); // dismissed / expired sessions leave the tray too
 
   if (IS_MAC) app.dock.setIcon(path.join(ASSETS, 'icon.png'));
   createTray();

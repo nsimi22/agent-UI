@@ -27,6 +27,57 @@ The hooks never slow your agent down or change what it does: they print nothing,
 
 Want to see it without real agents? `npm run demo` starts three demo agents the arcade runs itself, and `npm run demo:crowd` starts twelve.
 
+## Setting up on a Mac
+
+Run these in Terminal (or Cursor's terminal). The arcade needs a Mac with a terminal; it doesn't run on iPhone or iPad.
+
+**1. Install the tools** (skip any you already have):
+
+```bash
+xcode-select --install            # git + command-line tools (curl is built into macOS)
+brew install node                 # Node 18 or newer; get Homebrew from https://brew.sh
+node --version                    # should print v18 or higher
+```
+
+**2. Get the arcade and install it:**
+
+```bash
+git clone https://github.com/nsimi22/agent-UI.git
+cd agent-UI
+npm install
+```
+
+**3. Connect Claude Code and Codex** (once):
+
+```bash
+npm run connect
+```
+
+Then open `codex`, type `/hooks`, and trust the Agent Arcade hooks. Claude Code needs no extra step.
+
+**4. Start it:**
+
+```bash
+npm run desktop                   # the desktop app, with menu-bar icon and notifications
+# or, in the browser:
+npm start                         # then open http://127.0.0.1:4321
+```
+
+The first time the arcade sends a notification, macOS may ask whether to allow it. Click **Allow**. (When you run it with `npm run desktop`, notifications show up under the name "Electron"; the installed app in step 5 uses its own name.)
+
+**5. Optional: make it a real app in your Applications folder.**
+
+```bash
+npm run dist:mac                  # builds a .dmg for your Mac (Apple silicon or Intel) in dist/
+open dist/*.dmg                   # drag Agent Arcade into Applications
+```
+
+The build isn't code-signed, so the first launch is blocked by Gatekeeper. Right-click **Agent Arcade** in Applications, choose **Open**, then **Open** again. After that it opens normally, and you can turn on **Open at login** from its menu-bar icon.
+
+**6. Optional: jump into Cursor from the arcade.** The **Open in Cursor** button works as-is on a Mac. If you'd rather use the `cursor` command, open Cursor, press `⌘⇧P`, and run **Shell Command: Install 'cursor' command in PATH**.
+
+To stop watching your sessions at any time: `npm run disconnect`.
+
 ## What you see
 
 | Critter | Status | Means |

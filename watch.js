@@ -46,6 +46,9 @@ function fromClaude(e) {
     case 'PostToolUse':
       return { ...base, action: 'activity' }; // a permission prompt was answered
     case 'Notification':
+      // Claude has been idle for a while. Pressing Esc mid-turn or at a
+      // permission prompt sends no Stop, so this is what un-sticks the pod.
+      if (e.notification_type === 'idle_prompt') return { ...base, action: 'settle' };
       if (WAITING_NOTIFICATIONS.has(e.notification_type) || (!e.notification_type && /permission|waiting/i.test(e.message || ''))) {
         return { ...base, action: 'wait', text: e.message || 'Waiting for you' };
       }
@@ -213,6 +216,12 @@ function createWatch(arcade) {
         broadcast('log', { id: a.cfg.id, text: `${a.cfg.name} finished a turn${secs ? ` in ${secs}s` : ''}` });
         break;
       }
+      case 'settle':
+        if (a.status !== 'working' && a.status !== 'waiting') break; // already settled
+        a.lastLine = null;
+        pushTranscript(a, { kind: 'sys', text: '⏸ stopped; waiting for your next prompt' });
+        setStatus(a, 'idle');
+        break;
       case 'interrupt':
         pushTranscript(a, { kind: 'sys', text: '⏹ interrupted' });
         setStatus(a, 'idle');
