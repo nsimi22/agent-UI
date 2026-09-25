@@ -1,0 +1,185 @@
+{
+  "ide": "cursor",
+  "agents": [
+    {
+      "id": "pip",
+      "name": "Pip",
+      "role": "Researcher",
+      "color": "#5eead4",
+      "hat": "antenna",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "scout",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "bolt",
+      "name": "Bolt",
+      "role": "Builder",
+      "color": "#fbbf24",
+      "hat": "hardhat",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "builder",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "grub",
+      "name": "Grub",
+      "role": "Chaos Engineer",
+      "color": "#f472b6",
+      "hat": "horns",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "gremlin",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "queenie",
+      "name": "Queenie",
+      "role": "Code Reviewer",
+      "color": "#fb923c",
+      "hat": "crown",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "scout",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "merlin",
+      "name": "Merlin",
+      "role": "Refactorer",
+      "color": "#a78bfa",
+      "hat": "wizard",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "builder",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "dj",
+      "name": "DJ",
+      "role": "Test Runner",
+      "color": "#60a5fa",
+      "hat": "headphones",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "builder",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "scooter",
+      "name": "Scooter",
+      "role": "Frontend",
+      "color": "#4ade80",
+      "hat": "cap",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "builder",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "bea",
+      "name": "Bea",
+      "role": "Docs Writer",
+      "color": "#f9a8d4",
+      "hat": "bow",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "scout",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "rusty",
+      "name": "Rusty",
+      "role": "Migrations",
+      "color": "#f87171",
+      "hat": "hardhat",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "gremlin",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nova",
+      "name": "Nova",
+      "role": "Perf Tuning",
+      "color": "#38bdf8",
+      "hat": "antenna",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "scout",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "moss",
+      "name": "Moss",
+      "role": "Dependency Bot",
+      "color": "#86efac",
+      "hat": "cap",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "builder",
+        "{prompt}"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "sprocket",
+      "name": "Sprocket",
+      "role": "Release Captain",
+      "color": "#fcd34d",
+      "hat": "crown",
+      "command": "node",
+      "args": [
+        "examples/demo-agent.js",
+        "--persona",
+        "gremlin",
+        "{prompt}"
+      ],
+      "cwd": "."
+    }
+  ]
+}

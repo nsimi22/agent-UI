@@ -1,0 +1,63 @@
+{
+  "ide": "cursor",
+  "agents": [
+    {
+      "id": "claude",
+      "name": "Clawd",
+      "role": "Claude Code",
+      "color": "#fb923c",
+      "hat": "crown",
+      "command": "claude",
+      "args": [
+        "-p",
+        "{prompt}"
+      ],
+      "cwd": "~/code/my-project",
+      "timeoutSec": 900
+    },
+    {
+      "id": "llama",
+      "name": "Lulu",
+      "role": "Ollama · llama3.2",
+      "color": "#a78bfa",
+      "hat": "wizard",
+      "command": "ollama",
+      "args": [
+        "run",
+        "llama3.2"
+      ],
+      "stdin": true
+    },
+    {
+      "id": "aider",
+      "name": "Ada",
+      "role": "Aider pair-programmer",
+      "color": "#60a5fa",
+      "hat": "headphones",
+      "command": "aider",
+      "args": [
+        "--yes-always",
+        "--no-pretty",
+        "--message",
+        "{prompt}"
+      ],
+      "cwd": "~/code/my-project",
+      "ide": "webstorm"
+    },
+    {
+      "id": "script",
+      "name": "Scrappy",
+      "role": "My own script",
+      "color": "#4ade80",
+      "hat": "cap",
+      "command": "python3",
+      "args": [
+        "./my_agent.py"
+      ],
+      "stdin": true,
+      "env": {
+        "MY_AGENT_MODE": "fast"
+      }
+    }
+  ]
+}
