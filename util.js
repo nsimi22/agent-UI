@@ -25,4 +25,23 @@ function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
 }
 
-module.exports = { truncate, tildify, readJson, writeJson };
+// On Windows many CLIs are .cmd/.bat shims (claude.cmd, code.cmd, …) that
+// only run through cmd.exe. Escape for cmd.exe the way cross-spawn does:
+// quote per the MSVC rules, then caret-escape metacharacters twice, because
+// the shim re-parses its arguments when it expands %*. The shim's own path is
+// caret-escaped once, so one under "C:\Program Files" still works.
+// Returns [program, args] to run with { windowsVerbatimArguments: true }.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdArg(arg) {
+  let s = String(arg).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
+  s = `"${s}"`;
+  return s.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
+}
+
+function viaCmd(file, args) {
+  const line = [file.replace(CMD_META, '^$1'), ...args.map(escapeCmdArg)].join(' ');
+  return [process.env.comspec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`]];
+}
+
+module.exports = { truncate, tildify, readJson, writeJson, viaCmd };

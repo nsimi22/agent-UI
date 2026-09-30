@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const { stripVTControlCharacters } = require('util');
 const { createWatch } = require('./watch');
 const { createTerminals, processChain, stillRunning } = require('./terminals');
-const { truncate, tildify, readJson, writeJson } = require('./util');
+const { truncate, tildify, readJson, writeJson, viaCmd } = require('./util');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -136,23 +136,12 @@ function findOnPath(cmd) {
   return null;
 }
 
-// On Windows many CLIs are .cmd/.bat shims (claude.cmd, npx.cmd, code.cmd, …)
-// that only run through cmd.exe. Escape for cmd.exe the way cross-spawn does:
-// quote per the MSVC rules, then caret-escape metacharacters twice, because
-// the shim re-parses its arguments when it expands %*.
-const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
-function escapeCmdArg(arg) {
-  let s = String(arg).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
-  s = `"${s}"`;
-  return s.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
-}
-
 function spawnCommand(command, args, opts) {
   if (process.platform === 'win32') {
     const file = findOnPath(command) || command;
     if (/\.(cmd|bat)$/i.test(file)) {
-      const line = [file.replace(CMD_META, '^$1'), ...args.map(escapeCmdArg)].join(' ');
-      return spawn(process.env.comspec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsVerbatimArguments: true });
+      const [cmd, cmdArgs] = viaCmd(file, args);
+      return spawn(cmd, cmdArgs, { ...opts, windowsVerbatimArguments: true });
     }
   }
   return spawn(command, args, opts);
@@ -585,9 +574,13 @@ async function handle(req, res) {
   }
 
   // The Agent Arcade Terminals editor extension. It's a Node client, never a
-  // web page, so anything carrying an Origin header is turned away.
+  // web page. A page can't send a custom header cross-origin without a CORS
+  // preflight (which we never allow), and a plain GET from a page carries no
+  // Origin, so the header is required and any Origin is still turned away.
   if (pathname.startsWith('/api/ide/')) {
-    if (req.headers.origin) return sendJson(res, 403, { error: 'editor extension only' });
+    if (req.headers.origin || req.headers['x-agent-arcade-editor'] !== '1') {
+      return sendJson(res, 403, { error: 'editor extension only' });
+    }
     if (pathname === '/api/ide/stream' && req.method === 'GET') return terminals.attach(req, res);
     if (pathname === '/api/ide/ack' && req.method === 'POST') {
       terminals.ack(await readBody(req).catch(() => null));

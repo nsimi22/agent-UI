@@ -2,7 +2,7 @@
   "name": "agent-arcade-terminals",
   "displayName": "Agent Arcade Terminals",
   "description": "Lets Agent Arcade jump to, and type into, the terminal a Claude Code or Codex session runs in.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "agent-arcade",
   "license": "MIT",
   "engines": { "vscode": "^1.75.0" },

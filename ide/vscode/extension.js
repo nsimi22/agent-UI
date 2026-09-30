@@ -11,6 +11,8 @@ const vscode = require('vscode');
 const RETRY_MS = 5000;
 const BRACKETED_PASTE = ['\x1b[200~', '\x1b[201~']; // lets multi-line replies arrive as one paste
 const KEYS = { enter: '\r', esc: '\x1b' };
+// The arcade only talks to requests carrying this; web pages can't send it.
+const EDITOR_HEADER = { 'X-Agent-Arcade-Editor': '1' };
 
 let request = null;
 let retryTimer = null;
@@ -23,7 +25,7 @@ function port() {
 function connect() {
   if (stopped) return;
   const query = `app=${encodeURIComponent(vscode.env.appName)}`;
-  request = http.get({ host: '127.0.0.1', port: port(), path: `/api/ide/stream?${query}` }, (res) => {
+  request = http.get({ host: '127.0.0.1', port: port(), path: `/api/ide/stream?${query}`, headers: EDITOR_HEADER }, (res) => {
     if (res.statusCode !== 200) {
       res.resume();
       return retry();
@@ -82,7 +84,7 @@ function ack(result) {
     port: port(),
     path: '/api/ide/ack',
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    headers: { ...EDITOR_HEADER, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
   });
   req.on('error', () => {});
   req.end(body);

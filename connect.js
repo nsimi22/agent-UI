@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { readJson } = require('./util');
+const { readJson, viaCmd } = require('./util');
 const { buildVsix, EXTENSION_ID } = require('./ide/build-vsix');
 
 const DEFAULT_PORT = 4321;
@@ -192,8 +192,15 @@ function editorCli({ cli, app }) {
   return candidates.find((f) => fs.existsSync(f)) || null;
 }
 
+// On Windows the editor CLIs are .cmd shims, which only run through cmd.exe.
 function runEditorCli(file, args) {
-  execFileSync(file, args, { stdio: 'ignore', timeout: 60_000, shell: process.platform === 'win32' });
+  const opts = { stdio: 'ignore', timeout: 60_000 };
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(file)) {
+    const [cmd, cmdArgs] = viaCmd(file, args);
+    execFileSync(cmd, cmdArgs, { ...opts, windowsVerbatimArguments: true });
+  } else {
+    execFileSync(file, args, opts);
+  }
 }
 
 function installExtension(port = DEFAULT_PORT) {

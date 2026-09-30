@@ -231,4 +231,4 @@ You can also point to a config file with `--config=path/to/agents.json` or `AGEN
 - `POST /api/hooks/claude` and `/api/hooks/codex` receive hook events from your terminals
 - `POST /api/agents/:id/forget` dismisses a watched session
 - `POST /api/agents/:id/terminal` shows a watched session's terminal; `POST /api/agents/:id/reply` with `{ "text" }` or `{ "key": "enter" | "esc" }` types into it
-- `GET /api/ide/stream` and `POST /api/ide/ack` are used by the editor extension
+- `GET /api/ide/stream` and `POST /api/ide/ack` are used by the editor extension (they require an `X-Agent-Arcade-Editor: 1` header and refuse browser requests)
