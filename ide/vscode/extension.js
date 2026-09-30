@@ -62,7 +62,7 @@ async function findTerminal(pids) {
 
 async function handle(cmd) {
   const terminal = await findTerminal(cmd.pids || []);
-  if (!terminal) return ack({ id: cmd.id, ok: false }); // not in this window
+  if (!terminal) return ack({ id: cmd.id, editor: cmd.editor, ok: false }); // not in this window
   if (cmd.type === 'focus') {
     terminal.show(false);
   } else if (cmd.type === 'send') {
@@ -72,7 +72,7 @@ async function handle(cmd) {
   // Extensions can't raise their own window, so tell the arcade which folder
   // this window has open; it re-opens that folder, which focuses this window.
   const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
-  ack({ id: cmd.id, ok: true, folder: folder && folder.uri.scheme === 'file' ? folder.uri.fsPath : null, app: vscode.env.appName });
+  ack({ id: cmd.id, editor: cmd.editor, ok: true, folder: folder && folder.uri.scheme === 'file' ? folder.uri.fsPath : null, app: vscode.env.appName });
 }
 
 function ack(result) {

@@ -47,9 +47,10 @@ function stillRunning(pid, parent) {
 }
 
 function createTerminals({ sse, broadcast }) {
-  const editors = new Set(); // open extension connections
-  const pending = new Map(); // command id -> { waiting, resolve }
+  const editors = new Map(); // connection id -> response, one per editor window
+  const pending = new Map(); // command id -> { answer, drop }
   let nextId = 1;
+  let nextEditor = 1;
 
   function announce() {
     broadcast('ide', { editors: editors.size });
@@ -59,19 +60,21 @@ function createTerminals({ sse, broadcast }) {
   function attach(req, res) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     res.write(': hello\n\n');
-    editors.add(res);
+    const editor = nextEditor++;
+    editors.set(editor, res);
     announce();
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => {
       clearInterval(ping);
-      editors.delete(res);
-      for (const p of pending.values()) p.drop(res);
+      editors.delete(editor);
+      for (const p of pending.values()) p.drop(editor);
       announce();
     });
   }
 
   // POST /api/ide/ack: an editor window says whether it had that terminal
-  // (and, if so, which folder the window has open).
+  // (and, if so, which folder the window has open). It echoes the connection
+  // id it was sent, so each window counts once per command.
   function ack(result) {
     const p = pending.get(result && result.id);
     if (p) p.answer(result);
@@ -83,19 +86,26 @@ function createTerminals({ sse, broadcast }) {
     if (!editors.size) return Promise.resolve(null);
     const id = nextId++;
     return new Promise((resolve) => {
-      let waiting = editors.size;
+      const waiting = new Set(editors.keys()); // windows that haven't answered yet
       const done = (result) => {
         clearTimeout(timer);
         pending.delete(id);
         resolve(result);
       };
+      const settle = (editor) => {
+        if (!waiting.delete(editor)) return false; // not sent to it, or already counted
+        if (!waiting.size) done(null);
+        return true;
+      };
       const timer = setTimeout(() => done(null), ACK_TIMEOUT_MS);
       pending.set(id, {
-        answer: (result) => (result.ok ? done(result) : --waiting <= 0 && done(null)),
-        drop: () => --waiting <= 0 && done(null),
+        answer: (result) => {
+          if (result.ok && waiting.has(result.editor)) done(result);
+          else settle(result.editor);
+        },
+        drop: settle,
       });
-      const payload = sse('command', { id, ...cmd });
-      for (const res of editors) res.write(payload);
+      for (const [editor, res] of editors) res.write(sse('command', { id, editor, ...cmd }));
     });
   }
 

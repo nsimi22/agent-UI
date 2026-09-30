@@ -100,11 +100,19 @@ function zip(entries) {
   return Buffer.concat([...parts, centralBuf, end]);
 }
 
-function buildVsix(out = path.join(__dirname, 'agent-arcade-terminals.vsix')) {
+// `port` becomes the extension's default agentArcade.port, so it connects to
+// the same arcade the hooks were pointed at.
+function buildVsix(out = path.join(__dirname, 'agent-arcade-terminals.vsix'), { port } = {}) {
+  const read = (f) => {
+    if (f !== 'package.json' || !port) return fs.readFileSync(path.join(SRC, f));
+    const withPort = structuredClone(pkg);
+    withPort.contributes.configuration.properties['agentArcade.port'].default = port;
+    return Buffer.from(JSON.stringify(withPort, null, 2) + '\n');
+  };
   const entries = [
     { name: 'extension.vsixmanifest', data: Buffer.from(manifest) },
     { name: '[Content_Types].xml', data: Buffer.from(contentTypes) },
-    ...FILES.map((f) => ({ name: `extension/${f}`, data: fs.readFileSync(path.join(SRC, f)) })),
+    ...FILES.map((f) => ({ name: `extension/${f}`, data: read(f) })),
   ];
   fs.writeFileSync(out, zip(entries));
   return out;

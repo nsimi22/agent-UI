@@ -94,6 +94,17 @@ const IDES = {
 };
 IDES.code = IDES.vscode;
 
+// The editor an extension reported (vscode.env.appName, e.g. "Visual Studio
+// Code"), or null if it isn't one we know how to launch.
+function ideForApp(app) {
+  const name = String(app || '').toLowerCase();
+  const key = Object.keys(IDES).find((k) => {
+    const ide = IDES[k];
+    return [ide.label, ide.mac].some((n) => n && n.toLowerCase() === name);
+  });
+  return key ? resolveIde(key) : null;
+}
+
 // "cursor" | { "label": "Sublime", "command": "subl", "args": ["{path}"] } | null
 function resolveIde(ide) {
   if (!ide) return null;
@@ -158,8 +169,7 @@ function launch(file, args) {
   });
 }
 
-async function openInIde(a, cwd = a.cfg.cwd) {
-  const { ide } = a.cfg;
+async function openInIde(a, cwd = a.cfg.cwd, ide = a.cfg.ide) {
   if (!ide) throw new Error(`${a.cfg.name} has no "ide" set in the agents config`);
   const bin = findOnPath(ide.cli);
   if (bin) return launch(bin, ide.args.map((x) => x.replaceAll('{path}', cwd)));
@@ -416,8 +426,9 @@ async function showTerminal(a) {
     await openInIde(a).catch(() => {});
     return { ok: true, exact: false, note: terminals.count() ? "Couldn't find that terminal in an open editor window." : NO_EDITOR };
   }
-  // Re-opening the window's own folder brings that exact window to the front.
-  if (found.folder) await openInIde(a, found.folder).catch(() => {});
+  // Re-opening the window's own folder brings that exact window to the front,
+  // in whichever editor had the terminal (not necessarily the configured one).
+  if (found.folder) await openInIde(a, found.folder, ideForApp(found.app) || a.cfg.ide).catch(() => {});
   return { ok: true, exact: true };
 }
 

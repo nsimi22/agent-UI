@@ -196,8 +196,8 @@ function runEditorCli(file, args) {
   execFileSync(file, args, { stdio: 'ignore', timeout: 60_000, shell: process.platform === 'win32' });
 }
 
-function installExtension() {
-  const vsix = buildVsix(path.join(os.tmpdir(), 'agent-arcade-terminals.vsix'));
+function installExtension(port = DEFAULT_PORT) {
+  const vsix = buildVsix(path.join(os.tmpdir(), 'agent-arcade-terminals.vsix'), { port });
   const done = [];
   for (const editor of EDITORS) {
     const cli = editorCli(editor);
@@ -233,7 +233,7 @@ function connectAll(port = DEFAULT_PORT) {
     `Claude Code: hooks added to ${connectClaude(port)}`,
     ...connectCodex(port).map((m) => `Codex: ${m}`),
     'Codex: open codex and run /hooks once to trust the Agent Arcade hooks. Until then you only get "finished" updates.',
-    `Editors: ${installExtension()}`,
+    `Editors: ${installExtension(port)}`,
   ];
   if (port !== DEFAULT_PORT) messages.push(`Note: the hooks point at port ${port}; keep the arcade on that port.`);
   return { messages };
