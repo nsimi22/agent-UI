@@ -18,6 +18,7 @@ const state = {
   sound: readPref('sound', true),
   density: readPref('density', 'auto'), // auto | cozy | compact
   filter: 'all',
+  editors: 0, // editor windows running the Agent Arcade Terminals extension
   search: '',
 };
 const AUTO_COMPACT_OVER = 6; // agents
@@ -210,7 +211,8 @@ function updatePod(id) {
   updateTimer(a);
 
   const quips = QUIPS[ds] || IDLE_QUIPS;
-  if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, pick(quips));
+  // First paint (e.g. after a reload): show what it's actually doing if we know.
+  if (!state.bubbles.has(id) && ds !== 'sleep') state.bubbles.set(id, (ds !== 'idle' && a.lastLine) || pick(quips));
   setBubble(id, state.bubbles.get(id) || '');
 }
 
@@ -279,8 +281,8 @@ async function openDrawer(id) {
   $('#drawerCmd').textContent = isWatched(a) ? `watching ${a.command} in ${a.where}` : `$ ${a.command}`;
   $('#drawerCmd').title = a.command;
   $('#ideBtn').hidden = !a.ide;
-  $('#ideBtn').textContent = `Open in ${a.ide} ↗`;
-  $('#ideBtn').title = a.cwd;
+  $('#ideBtn').textContent = isWatched(a) ? 'Open terminal ↗' : `Open in ${a.ide} ↗`;
+  $('#ideBtn').title = isWatched(a) ? `Show this session's terminal in ${a.ide}` : a.cwd;
   $('#drawer').classList.add('open');
   $('#drawer').setAttribute('aria-hidden', 'false');
   $('#scrim').classList.add('open');
@@ -296,7 +298,7 @@ async function openDrawer(id) {
     if (state.selected !== id) return;
   }
   renderTranscript();
-  setTimeout(() => $('#prompt').focus(), 250);
+  setTimeout(() => (isWatched(a) ? $('#reply') : $('#prompt')).focus(), 250);
 }
 
 function closeDrawer() {
@@ -315,7 +317,8 @@ function updateDrawer() {
   $('#drawerAvatar').className = `drawer-avatar s-${ds}`;
   const working = a.status === 'working';
   $('#composer').hidden = isWatched(a);
-  $('#watchNote').hidden = !isWatched(a);
+  $('#watchBar').hidden = !isWatched(a);
+  if (isWatched(a)) updateWatchBar(a);
   $('#stopBtn').hidden = !working;
   $('#sendBtn').disabled = working;
   $('#clearBtn').disabled = working;
@@ -426,6 +429,52 @@ $('#composer').addEventListener('submit', async (e) => {
 $('#prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#composer').requestSubmit();
 });
+// ---------------------------------------------------------------------------
+// Terminal sessions: jump to their terminal, or type into it from here
+
+async function showTerminal(a) {
+  try {
+    const r = await agentApi(a.id, 'terminal');
+    if (!r.exact) toast(r.note || `Opened ${a.name}'s project`);
+  } catch (err) {
+    toast(`⚠️ ${err.message}`);
+  }
+}
+
+function updateWatchBar(a) {
+  const canReply = a.terminal && state.editors > 0;
+  $('#replyForm').hidden = !canReply;
+  $('#watchQuick').hidden = !canReply || a.status !== 'waiting';
+  $('#watchHint').textContent = canReply
+    ? `⌨️ Typed into its ${a.ide || 'editor'} terminal, as if you were there.`
+    : !a.terminal
+      ? "💻 Runs in your terminal. Reply there (it'll be reachable from here after its next step)."
+      : '💻 Runs in your terminal. Install the Agent Arcade Terminals extension (npm run connect) to reply from here.';
+}
+
+async function sendToTerminal(body) {
+  const id = state.selected;
+  try {
+    await agentApi(id, 'reply', body);
+    sfx('start');
+    return true;
+  } catch (err) {
+    toast(`⚠️ ${err.message}`);
+    return false;
+  }
+}
+
+$('#replyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('#reply').value.trim();
+  if (text && (await sendToTerminal({ text }))) $('#reply').value = '';
+});
+$('#reply').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#replyForm').requestSubmit();
+});
+$('#approveBtn').addEventListener('click', () => sendToTerminal({ key: 'enter' }));
+$('#escBtn').addEventListener('click', () => sendToTerminal({ key: 'esc' }));
+
 $('#forgetBtn').addEventListener('click', () => agentApi(state.selected, 'forget').catch((e) => toast(e.message)));
 for (const action of ['stop', 'clear']) {
   $(`#${action}Btn`).addEventListener('click', () => agentApi(state.selected, action).catch((e) => toast(e.message)));
@@ -433,6 +482,7 @@ for (const action of ['stop', 'clear']) {
 $('#ideBtn').addEventListener('click', async () => {
   const a = state.agents.get(state.selected);
   if (!a) return;
+  if (isWatched(a)) return showTerminal(a);
   try {
     await agentApi(a.id, 'open-ide');
     toast(`↗ Opening ${a.name}'s project in ${a.ide}`);
@@ -536,7 +586,8 @@ function connect() {
   };
 
   es.addEventListener('hello', (ev) => {
-    const { agents } = JSON.parse(ev.data);
+    const { agents, editors } = JSON.parse(ev.data);
+    state.editors = editors || 0;
     state.agents = new Map(agents.map((a) => [a.id, a]));
     state.transcripts.clear();
     renderFloor();
@@ -592,6 +643,11 @@ function connect() {
     if (a) a.lastActivity = entry.t;
     if (lastLine && entry.kind !== 'prompt' && entry.kind !== 'sys') setBubble(id, lastLine);
     if (state.selected === id && list) appendEntry(entry);
+  });
+
+  es.addEventListener('ide', (ev) => {
+    state.editors = JSON.parse(ev.data).editors;
+    if (state.selected) updateDrawer();
   });
 
   es.addEventListener('removed', (ev) => {

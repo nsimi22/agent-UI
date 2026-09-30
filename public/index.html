@@ -62,9 +62,20 @@
     </div>
     <div class="drawer-stats" id="drawerStats"></div>
     <div class="transcript" id="transcript" aria-live="polite"></div>
-    <div class="watch-note" id="watchNote" hidden>
-      <span>💻 This session runs in your terminal. Reply to it there.</span>
-      <button type="button" class="btn ghost small" id="forgetBtn" title="Remove from the floor">Dismiss</button>
+    <div class="watch-bar" id="watchBar" hidden>
+      <div class="watch-quick" id="watchQuick" hidden>
+        <span>It's asking for your OK:</span>
+        <button type="button" class="btn primary small" id="approveBtn" title="Press Enter in its terminal (picks the highlighted choice)">✓ Approve</button>
+        <button type="button" class="btn ghost small" id="escBtn" title="Press Esc in its terminal">Esc</button>
+      </div>
+      <form class="reply" id="replyForm" hidden>
+        <textarea id="reply" rows="2" placeholder="Reply in its terminal… (⌘/Ctrl + Enter to send)"></textarea>
+        <button type="submit" class="btn primary">Send ↵</button>
+      </form>
+      <div class="watch-foot">
+        <span id="watchHint"></span>
+        <button type="button" class="btn ghost small" id="forgetBtn" title="Remove from the floor">Dismiss</button>
+      </div>
     </div>
     <form class="composer" id="composer">
       <textarea id="prompt" rows="2" placeholder="Describe a quest… (⌘/Ctrl + Enter to send)"></textarea>
